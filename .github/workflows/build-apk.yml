@@ -140,20 +140,23 @@ jobs:
           RELEASE_TAG="debug-apk-build-${{ github.run_number }}-${{ github.run_attempt }}"
           RELEASE_TITLE="Debug APK Build #${{ github.run_number }}"
 
-          RELEASE_NOTES="### Automated Debug APK Build
-
-- **Type**: Automatically generated debug APK
-- **Builder**: GitHub Actions
-- **Run Number**: ${{ github.run_number }}
-- **Run Attempt**: ${{ github.run_attempt }}
-- **Commit SHA**: ${{ github.sha }}
-- **Usage**: Intended for testing only. Not a Play Store production release.
-- **Signing**: Signed only with a temporary debug keystore."
+          NOTES_FILE=$(mktemp)
+          {
+            echo "### Automated Debug APK Build"
+            echo ""
+            echo "- **Type**: Automatically generated debug APK"
+            echo "- **Builder**: GitHub Actions"
+            echo "- **Run Number**: ${{ github.run_number }}"
+            echo "- **Run Attempt**: ${{ github.run_attempt }}"
+            echo "- **Commit SHA**: ${{ github.sha }}"
+            echo "- **Usage**: Intended for testing only. Not a Play Store production release."
+            echo "- **Signing**: Signed only with a temporary debug keystore."
+          } > "$NOTES_FILE"
 
           echo "Publishing GitHub Release: $RELEASE_TAG"
           gh release create "$RELEASE_TAG" "$ASSET_PATH" \
             --title "$RELEASE_TITLE" \
-            --notes "$RELEASE_NOTES" \
+            --notes-file "$NOTES_FILE" \
             --target "${{ github.sha }}" \
             --latest
 

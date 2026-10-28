@@ -92,19 +92,40 @@ class SiriTextToSpeech(
         applyVoiceSettings()
     }
 
-    private fun applyVoiceSettings() {
+    private fun getTargetLocale(text: String? = null): Locale {
+        return when (currentLanguage) {
+            LanguageOption.HINDI -> Locale.forLanguageTag("hi-IN")
+            LanguageOption.HINGLISH -> {
+                // If text is provided and contains Devanagari script, use Hindi locale; otherwise use Indian English for natural Hinglish
+                if (text != null && text.any { it in '\u0900'..'\u097F' }) {
+                    Locale.forLanguageTag("hi-IN")
+                } else {
+                    Locale.forLanguageTag("en-IN")
+                }
+            }
+            LanguageOption.ENGLISH -> Locale.US
+            LanguageOption.AUTO -> {
+                if (text != null) detectLanguageFromText(text) else Locale.US
+            }
+        }
+    }
+
+    fun applyVoiceSettings(forText: String? = null) {
         val engine = tts ?: return
         if (!isInitialized) return
 
-        val locale = when (currentLanguage) {
-            LanguageOption.HINDI -> Locale.forLanguageTag("hi-IN")
-            LanguageOption.HINGLISH -> Locale.forLanguageTag("hi-IN")
-            LanguageOption.ENGLISH -> Locale.US
-            LanguageOption.AUTO -> Locale.US
-        }
+        val locale = getTargetLocale(forText)
         val langResult = engine.setLanguage(locale)
         if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-            engine.setLanguage(Locale.US)
+            // Fallback to English (India or US) if target locale not supported on device
+            if (locale.language == "hi") {
+                val fallbackResult = engine.setLanguage(Locale.forLanguageTag("en-IN"))
+                if (fallbackResult == TextToSpeech.LANG_MISSING_DATA || fallbackResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    engine.setLanguage(Locale.US)
+                }
+            } else {
+                engine.setLanguage(Locale.US)
+            }
         }
 
         applyGenderVoice(locale)
@@ -122,27 +143,36 @@ class SiriTextToSpeech(
             val availableVoices = engine.voices
             if (!availableVoices.isNullOrEmpty()) {
                 val matchingLocaleVoices = availableVoices.filter { voice ->
-                    voice.locale.language == targetLocale.language
+                    voice.locale.language.equals(targetLocale.language, ignoreCase = true)
                 }
+                val pool = if (matchingLocaleVoices.isNotEmpty()) matchingLocaleVoices else availableVoices.toList()
+
                 val selectedVoice = when (currentVoiceGender) {
                     VoiceGender.FEMALE -> {
-                        matchingLocaleVoices.firstOrNull { voice ->
+                        pool.firstOrNull { voice ->
                             val n = voice.name.lowercase()
-                            n.contains("female") || n.contains("#female") || n.contains("-fem-") ||
-                            n.contains("_fem") || n.contains("sfg") || n.contains("f00") || n.contains("woman")
-                        } ?: matchingLocaleVoices.firstOrNull()
+                            (n.contains("female") || n.contains("#female") || n.contains("-fem-") ||
+                             n.contains("_fem") || n.contains("sfg") || n.contains("f00") ||
+                             n.contains("woman") || n.contains("hia") || n.contains("hic") ||
+                             n.contains("hie") || n.contains("-a-") || n.contains("-c-") ||
+                             n.contains("-d-") || n.contains("-f-") || n.contains("end") || n.contains("ene")) &&
+                             !n.contains("male_")
+                        } ?: pool.firstOrNull()
                     }
                     VoiceGender.MALE -> {
-                        matchingLocaleVoices.firstOrNull { voice ->
+                        pool.firstOrNull { voice ->
                             val n = voice.name.lowercase()
-                            (n.contains("male") && !n.contains("female")) || n.contains("-male-") || n.contains("m00")
-                        } ?: matchingLocaleVoices.firstOrNull()
+                            (n.contains("male") || n.contains("-male-") || n.contains("_male") ||
+                             n.contains("m00") || n.contains("man") || n.contains("hib") ||
+                             n.contains("hid") || n.contains("-b-") || n.contains("-e-") ||
+                             n.contains("enc")) && !n.contains("female")
+                        } ?: pool.firstOrNull()
                     }
                     VoiceGender.SYSTEM_DEFAULT -> null
                 }
                 if (selectedVoice != null) {
                     engine.voice = selectedVoice
-                    Log.d("SiriTTS", "Selected engine voice: ${selectedVoice.name} for $currentVoiceGender")
+                    Log.d("SiriTTS", "Applied engine voice: ${selectedVoice.name} for $currentVoiceGender")
                 }
             }
         } catch (e: Exception) {
@@ -240,12 +270,8 @@ class SiriTextToSpeech(
         val clean = sanitizeForSpeech(text)
         if (clean.isBlank()) return
 
-        // If language is AUTO, dynamically adapt engine locale based on text script
-        if (currentLanguage == LanguageOption.AUTO) {
-            val detectedLocale = detectLanguageFromText(clean)
-            tts?.setLanguage(detectedLocale)
-            applyGenderVoice(detectedLocale)
-        }
+        // Always apply target locale, pitch, speed, and gender voice for this utterance
+        applyVoiceSettings(clean)
 
         // Split by sentence boundaries to insert natural breath pauses
         val sentences = clean.split(Regex("""(?<=[.!?])\s+""")).filter { it.isNotBlank() }

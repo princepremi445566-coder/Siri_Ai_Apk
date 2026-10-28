@@ -205,18 +205,6 @@ fun VoiceAssistantScreen(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
-
-                    Surface(
-                        color = SiriDarkSurfaceVariant,
-                        shape = RoundedCornerShape(20.dp)
-                    ) {
-                        Text(
-                            text = personality.displayName,
-                            color = SiriTextSecondary,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        )
-                    }
                 }
 
                 // Daily Briefing, Flashlight, New Chat, and History Quick Toggles
@@ -324,11 +312,11 @@ fun VoiceAssistantScreen(
 
                 // Voice State Indicator Text
                 val stateText = when (voiceState) {
-                    VoiceState.LISTENING -> "Listening to your voice..."
-                    VoiceState.THINKING -> "Siri is thinking..."
-                    VoiceState.SPEAKING -> "Siri is speaking (Tap to interrupt)..."
+                    VoiceState.LISTENING -> "Listening..."
+                    VoiceState.THINKING -> "Thinking..."
+                    VoiceState.SPEAKING -> "Speaking..."
                     VoiceState.ERROR -> "Something went wrong"
-                    VoiceState.IDLE -> "Tap orb or microphone to speak"
+                    VoiceState.IDLE -> "Tap orb or mic to speak"
                 }
 
                 Text(
@@ -349,11 +337,11 @@ fun VoiceAssistantScreen(
                 // Live Transcript / Response Preview Card
                 val lastMsg = currentSessionMessages.lastOrNull()
                 val displayText = when {
-                    voiceState == VoiceState.LISTENING -> transcription.ifBlank { "Speak now (English, Hindi, or Hinglish)..." }
-                    voiceState == VoiceState.THINKING -> "Analyzing query and device actions..."
+                    voiceState == VoiceState.LISTENING -> transcription.ifBlank { "Listening..." }
+                    voiceState == VoiceState.THINKING -> "Thinking..."
                     lastSpeech.isNotBlank() -> lastSpeech
                     lastMsg != null -> lastMsg.text
-                    else -> "Say “Hey Siri, turn on flashlight”, “Daily briefing”, or “Dial 9876543210”"
+                    else -> "How can I help you?"
                 }
 
                 Card(
@@ -377,23 +365,6 @@ fun VoiceAssistantScreen(
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
-
-                                // Freshness Badge & Latency
-                                if (voiceState != VoiceState.LISTENING && lastMsg != null) {
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Surface(
-                                        color = Color(lastMsg.freshness.badgeColorHex).copy(alpha = 0.15f),
-                                        shape = RoundedCornerShape(6.dp)
-                                    ) {
-                                        Text(
-                                            text = "${lastMsg.freshness.label}${if (lastMsg.latencyMs != null) " • ${lastMsg.latencyMs}ms" else ""}",
-                                            color = Color(lastMsg.freshness.badgeColorHex),
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
                             }
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -487,7 +458,7 @@ fun VoiceAssistantScreen(
 
                 // Quick Command Action Chips
                 Text(
-                    text = "Quick Actions & Automation",
+                    text = "Quick Actions",
                     color = SiriTextSecondary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,

@@ -1,8 +1,12 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -20,12 +24,14 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,9 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.ui.screens.AiStudioScreen
 import com.example.ui.screens.PrivacyScreen
 import com.example.ui.screens.ProductivityScreen
@@ -97,24 +105,81 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainContent(viewModel: SiriViewModel) {
+    val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(SiriTab.ASSISTANT) }
+    var showPermissionSettingsDialog by remember { mutableStateOf(false) }
 
-    // Request necessary runtime permissions
+    // Request only ungranted runtime permissions
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ ->
-        // Permissions handled gracefully
+    ) { permissionsResult ->
+        val audioGranted = permissionsResult[Manifest.permission.RECORD_AUDIO] ?: (
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        )
+        if (!audioGranted) {
+            showPermissionSettingsDialog = true
+        }
     }
 
     LaunchedEffect(Unit) {
-        val permissions = mutableListOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.CAMERA
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        val requiredPermissions = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requiredPermissions.add(Manifest.permission.RECORD_AUDIO)
         }
-        permissionLauncher.launch(permissions.toTypedArray())
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requiredPermissions.add(Manifest.permission.CAMERA)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        // Only launch if there are actually ungranted permissions
+        if (requiredPermissions.isNotEmpty()) {
+            permissionLauncher.launch(requiredPermissions.toTypedArray())
+        }
+    }
+
+    if (showPermissionSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionSettingsDialog = false },
+            title = {
+                Text(
+                    text = "Microphone Permission Required",
+                    color = SiriTextPrimary
+                )
+            },
+            text = {
+                Text(
+                    text = "Siri needs microphone access to listen to voice commands and detect wake words. Please allow microphone permission in App Settings.",
+                    color = SiriTextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showPermissionSettingsDialog = false
+                        val intent = Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", context.packageName, null)
+                        ).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                    }
+                ) {
+                    Text("Open Settings", color = SiriCyan)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionSettingsDialog = false }) {
+                    Text("Later", color = SiriTextSecondary)
+                }
+            },
+            containerColor = SiriDarkSurface,
+            tonalElevation = 6.dp
+        )
     }
 
     Scaffold(

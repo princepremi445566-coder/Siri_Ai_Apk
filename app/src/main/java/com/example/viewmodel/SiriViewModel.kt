@@ -209,10 +209,29 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
             onUndoTrigger = { performUndo() },
             onVoiceGenderTrigger = { gender ->
                 setVoiceGender(gender)
+                val lang = repository.selectedLanguage.value
                 val speech = when (gender) {
-                    VoiceGender.FEMALE -> "Maine voice ko Female Siri voice par set kar diya hai. Kaise madad kar sakti hoon?"
-                    VoiceGender.MALE -> "Voice has been set to Male voice."
-                    VoiceGender.SYSTEM_DEFAULT -> "Voice reset to system default."
+                    VoiceGender.FEMALE -> {
+                        when (lang) {
+                            LanguageOption.HINDI -> "मैंने आवाज़ को फीमेल सिरी आवाज़ पर सेट कर दिया है। मैं आपकी क्या मदद करूँ?"
+                            LanguageOption.HINGLISH -> "Maine voice ko Female Siri voice par set kar diya hai. Kaise madad kar sakti hoon?"
+                            LanguageOption.ENGLISH, LanguageOption.AUTO -> "Voice set to Female Siri voice. How can I help you?"
+                        }
+                    }
+                    VoiceGender.MALE -> {
+                        when (lang) {
+                            LanguageOption.HINDI -> "मैंने आवाज़ को मेल आवाज़ पर सेट कर दिया है।"
+                            LanguageOption.HINGLISH -> "Voice ko Male voice par set kar diya hai."
+                            LanguageOption.ENGLISH, LanguageOption.AUTO -> "Voice has been set to Male voice."
+                        }
+                    }
+                    VoiceGender.SYSTEM_DEFAULT -> {
+                        when (lang) {
+                            LanguageOption.HINDI -> "आवाज़ सिस्टम डिफ़ॉल्ट पर रीसेट कर दी गई है।"
+                            LanguageOption.HINGLISH -> "Voice system default par reset kar di gayi hai."
+                            LanguageOption.ENGLISH, LanguageOption.AUTO -> "Voice reset to system default."
+                        }
+                    }
                 }
                 IntentExecutionResult(
                     intentName = "SET_VOICE_GENDER",
@@ -221,7 +240,8 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
                     success = true,
                     actionSummary = "Changed voice to ${gender.displayName}"
                 )
-            }
+            },
+            getCurrentLanguage = { repository.selectedLanguage.value }
         )
     }
 
@@ -268,12 +288,18 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
     fun setVoiceGender(gender: VoiceGender) {
         repository.updateVoiceGender(gender)
         textToSpeech?.setVoiceGender(gender)
+        viewModelScope.launch {
+            _uiEvents.emit("Voice set to: ${gender.displayName}")
+        }
     }
 
     fun setLanguage(language: LanguageOption) {
         repository.updateLanguage(language)
         textToSpeech?.setLanguage(language)
         speechRecognizer?.setLanguage(language)
+        viewModelScope.launch {
+            _uiEvents.emit("Language set to: ${language.displayName}")
+        }
     }
 
     fun setSpeedMultiplier(multiplier: Float) {

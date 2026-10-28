@@ -19,7 +19,8 @@ class SiriIntentParser(
     private val getVoiceShortcuts: (() -> List<VoiceShortcut>)? = null,
     private val onDailyBriefingTrigger: (() -> IntentExecutionResult)? = null,
     private val onUndoTrigger: (() -> IntentExecutionResult)? = null,
-    private val onVoiceGenderTrigger: ((gender: VoiceGender) -> IntentExecutionResult)? = null
+    private val onVoiceGenderTrigger: ((gender: VoiceGender) -> IntentExecutionResult)? = null,
+    private val getCurrentLanguage: (() -> com.example.model.LanguageOption)? = null
 ) {
 
     // Contextual conversation memory for follow-up commands
@@ -27,6 +28,29 @@ class SiriIntentParser(
     private var lastParameters: Map<String, String> = emptyMap()
 
     fun getLastExecutedIntent(): String? = lastExecutedIntent
+
+    private fun isHindiMode(prompt: String): Boolean {
+        val current = getCurrentLanguage?.invoke() ?: com.example.model.LanguageOption.AUTO
+        return when (current) {
+            com.example.model.LanguageOption.HINDI -> true
+            com.example.model.LanguageOption.HINGLISH -> false
+            com.example.model.LanguageOption.ENGLISH -> false
+            com.example.model.LanguageOption.AUTO -> prompt.any { it in '\u0900'..'\u097F' }
+        }
+    }
+
+    private fun isHinglishMode(prompt: String): Boolean {
+        val current = getCurrentLanguage?.invoke() ?: com.example.model.LanguageOption.AUTO
+        return when (current) {
+            com.example.model.LanguageOption.HINDI -> false
+            com.example.model.LanguageOption.HINGLISH -> true
+            com.example.model.LanguageOption.ENGLISH -> false
+            com.example.model.LanguageOption.AUTO -> {
+                val lower = prompt.lowercase()
+                listOf("kaise", "kya", "batao", "karo", "chalu", "shukriya", "dhanyawad", "samachar", "sunao", "haal").any { lower.contains(it) }
+            }
+        }
+    }
 
     /**
      * Cleans the prompt by stripping wake word prefixes like "Hey Siri", "Siri", etc.
@@ -212,7 +236,9 @@ class SiriIntentParser(
 
         // How are you?
         if (matchesAny(text, listOf("kya haal hai", "kaise ho", "siri kaise ho", "aap kaise ho", "how are you", "how are you doing", "sab kaisa hai"))) {
-            val reply = if (text.contains("kaise") || text.contains("kya haal") || text.contains("sab kaisa")) {
+            val reply = if (isHindiMode(text)) {
+                "मैं बिल्कुल ठीक हूँ, धन्यवाद! आप बताइए, मैं आपकी क्या मदद कर सकती हूँ?"
+            } else if (text.contains("kaise") || text.contains("kya haal") || text.contains("sab kaisa") || isHinglishMode(text)) {
                 "Main badhiya hoon, dhanyawad! Aap bataiye, aaj aapki kya madad kar sakti hoon?"
             } else {
                 "I'm doing well, thank you for asking! How can I help you today?"
@@ -224,7 +250,9 @@ class SiriIntentParser(
 
         // Identity & Who are you?
         if (matchesAny(text, listOf("who are you", "what is your name", "tumhara naam kya hai", "aapka naam kya hai", "tum kaun ho", "who made you", "tumhe kisne banaya", "are you siri", "are you real siri"))) {
-            val reply = if (text.contains("tum") || text.contains("aapka") || text.contains("kisne")) {
+            val reply = if (isHindiMode(text)) {
+                "मैं सिरी हूँ, आपकी स्मार्ट पर्सनल वॉइस असिस्टेंट। मैं आपके फोन के कामों को आसान बनाने के लिए हमेशा तैयार हूँ।"
+            } else if (text.contains("tum") || text.contains("aapka") || text.contains("kisne") || isHinglishMode(text)) {
                 "Main Siri hoon, aapki smart personal voice assistant. Main aapke phone ke kaamo ko aasan banane ke liye hamesha taiyar hoon."
             } else {
                 "I'm Siri. Your personal voice assistant, designed to help you get things done calmly and quickly."
@@ -239,7 +267,9 @@ class SiriIntentParser(
             "what can you do", "help me", "what are your capabilities", "tum kya kar sakti ho",
             "kya kar sakti ho", "madad karo", "tumhari capabilities kya hain"
         ))) {
-            val reply = if (text.contains("tum") || text.contains("madad") || text.contains("kya kar")) {
+            val reply = if (isHindiMode(text)) {
+                "मैं आपका फ्लैशलाइट चालू/बंद कर सकती हूँ, अलार्म और टाइमर लगा सकती हूँ, ऐप्स खोल सकती हूँ, बैटरी और समय बता सकती हूँ, और आपके सवालों के जवाब दे सकती हूँ।"
+            } else if (text.contains("tum") || text.contains("madad") || text.contains("kya kar") || isHinglishMode(text)) {
                 "Main aapka flashlight on kar sakti hoon, alarms aur timers set kar sakti hoon, notes aur tasks manage kar sakti hoon, web search kar sakti hoon, aur Hindi ya English mein baat kar sakti hoon. Bas boliye!"
             } else {
                 "I can toggle your flashlight, set timers and alarms, take notes, manage tasks, launch apps, dial contacts, provide daily briefings, and search the web. What would you like to do?"
@@ -251,7 +281,9 @@ class SiriIntentParser(
 
         // Playful & Philosophical Easter Eggs
         if (matchesAny(text, listOf("do you love me", "i love you", "will you marry me", "mujhse shaadi karogi", "mujhse dosti karoge", "kya tum mujhse pyar karti ho"))) {
-            val reply = if (text.contains("mujhse") || text.contains("pyar") || text.contains("shaadi")) {
+            val reply = if (isHindiMode(text)) {
+                "आप बहुत अच्छे हैं, लेकिन मेरे पास दिल के बजाय केवल एल्गोरिदम हैं! हम अच्छे दोस्त ज़रूर बन सकते हैं।"
+            } else if (text.contains("mujhse") || text.contains("pyar") || text.contains("shaadi") || isHinglishMode(text)) {
                 "Aap bahut ache hain, lekin mere paas dil ke bajaye sirf algorithms hain! Hum ache dost zaroor hain."
             } else {
                 "I value our friendship deeply, but I think our relationship is best suited as user and assistant. Besides, I don't have a physical form!"
@@ -262,14 +294,22 @@ class SiriIntentParser(
         }
 
         if (matchesAny(text, listOf("what is the meaning of life", "meaning of life", "zindagi ka maksad kya hai", "jeevan ka arth kya hai"))) {
-            val reply = "According to the Hitchhiker's Guide, it's 42. But I think kindness, curiosity, and a warm cup of chai come pretty close."
+            val reply = if (isHindiMode(text)) {
+                "जिंदगी का मतलब खुश रहना, अपनों की मदद करना और नई चीजें सीखना है।"
+            } else {
+                "According to the Hitchhiker's Guide, it's 42. But I think kindness, curiosity, and a warm cup of chai come pretty close."
+            }
             val res = IntentExecutionResult("PHILOSOPHICAL", emptyMap(), reply, true, "Meaning of Life")
             recordLastIntent(res)
             return res
         }
 
         if (matchesAny(text, listOf("are you smart", "are you intelligent", "kya tum intelligent ho", "kya tum smart ho"))) {
-            val reply = "I'm smart enough to help you breeze through your day, and humble enough to search the web whenever I need to learn more."
+            val reply = if (isHindiMode(text)) {
+                "मैं आपके फोन के काम आसान बनाने जितनी होशियार हूँ, और नई चीजें सीखने के लिए हमेशा तैयार रहती हूँ।"
+            } else {
+                "I'm smart enough to help you breeze through your day, and humble enough to search the web whenever I need to learn more."
+            }
             val res = IntentExecutionResult("PLAYFUL", emptyMap(), reply, true, "Intelligence Response")
             recordLastIntent(res)
             return res
@@ -278,9 +318,19 @@ class SiriIntentParser(
         // Standard Greetings
         if (matchesAny(text, listOf("namaste", "hello", "hi", "hey", "good morning", "good evening", "good afternoon", "shubh prabhat", "shubh ratri", "good night"))) {
             val reply = when {
-                text.contains("good morning") || text.contains("shubh prabhat") -> "Good morning! Wishing you a productive and wonderful day ahead."
-                text.contains("good night") || text.contains("shubh ratri") -> "Good night! Sleep well and rest easy. I'll be right here in the morning."
-                text.contains("namaste") -> "Namaste! Main aapki kya madad kar sakti hoon?"
+                text.contains("good morning") || text.contains("shubh prabhat") -> {
+                    if (isHindiMode(text)) "शुभ प्रभात! आपका दिन बहुत मंगलमय और शानदार हो।"
+                    else "Good morning! Wishing you a productive and wonderful day ahead."
+                }
+                text.contains("good night") || text.contains("shubh ratri") -> {
+                    if (isHindiMode(text)) "शुभ रात्रि! आराम से सोइए, सुबह मैं यहीं मिलूँगी।"
+                    else "Good night! Sleep well and rest easy. I'll be right here in the morning."
+                }
+                text.contains("namaste") || isHindiMode(text) -> {
+                    if (isHindiMode(text)) "नमस्ते! मैं आपकी क्या सहायता कर सकती हूँ?"
+                    else "Namaste! Main aapki kya madad kar sakti hoon?"
+                }
+                isHinglishMode(text) -> "Hello! Kaise hain aap? Aaj main aapki kya madad kar sakti hoon?"
                 else -> "Hello! Always glad to hear from you. How can I help?"
             }
             val res = IntentExecutionResult("GREETING", emptyMap(), reply, true, "Greeting")
@@ -290,7 +340,9 @@ class SiriIntentParser(
 
         // Courtesy
         if (matchesAny(text, listOf("thank you", "thanks", "dhanyawad", "shukriya", "bahut accha", "you are great", "tum bohot achi ho"))) {
-            val reply = if (text.contains("dhanyawad") || text.contains("shukriya") || text.contains("achi") || text.contains("accha")) {
+            val reply = if (isHindiMode(text)) {
+                "आपका बहुत स्वागत है! मैं हमेशा आपकी मदद के लिए तैयार हूँ।"
+            } else if (text.contains("dhanyawad") || text.contains("shukriya") || text.contains("achi") || text.contains("accha") || isHinglishMode(text)) {
                 "Aapka swagat hai! Main hamesha aapki madad ke liye hazir hoon."
             } else {
                 "You're very welcome! It's always my pleasure to help."
@@ -303,21 +355,42 @@ class SiriIntentParser(
         // 6. Flashlight / Torch
         if (matchesAny(text, listOf("turn on flashlight", "turn on the flashlight", "turn on torch", "torch on", "flashlight on", "batti jalao", "torch jalao", "light on karo", "flashlight chalu karo", "torch chalu karo", "torch light on karo"))) {
             val (ok, msg) = deviceController.setFlashlight(true)
-            val res = IntentExecutionResult("FLASHLIGHT_ON", emptyMap(), msg, ok, "Turned on Flashlight", isReversible = true, undoAction = "FLASHLIGHT_OFF")
+            val speech = if (isHindiMode(text)) {
+                if (ok) "फ्लैशलाइट चालू कर दी गई है।" else "फ्लैशलाइट चालू नहीं हो सकी।"
+            } else if (isHinglishMode(text) || text.contains("chalu") || text.contains("jalao") || text.contains("karo")) {
+                if (ok) "Flashlight on kar di gayi hai." else "Flashlight on nahi ho saki."
+            } else msg
+            val res = IntentExecutionResult("FLASHLIGHT_ON", emptyMap(), speech, ok, "Turned on Flashlight", isReversible = true, undoAction = "FLASHLIGHT_OFF")
             recordLastIntent(res)
             return res
         }
         if (matchesAny(text, listOf("turn off flashlight", "turn off the flashlight", "turn off torch", "torch off", "flashlight off", "batti band karo", "torch band karo", "light off karo", "flashlight band kar do", "torch bujhao", "batti bujhao"))) {
             val (ok, msg) = deviceController.setFlashlight(false)
-            val res = IntentExecutionResult("FLASHLIGHT_OFF", emptyMap(), msg, ok, "Turned off Flashlight", isReversible = true, undoAction = "FLASHLIGHT_ON")
+            val speech = if (isHindiMode(text)) {
+                if (ok) "फ्लैशलाइट बंद कर दी गई है।" else "फ्लैशलाइट बंद नहीं हो सकी।"
+            } else if (isHinglishMode(text) || text.contains("band") || text.contains("bujhao")) {
+                if (ok) "Flashlight off kar di gayi hai." else "Flashlight off nahi ho saki."
+            } else msg
+            val res = IntentExecutionResult("FLASHLIGHT_OFF", emptyMap(), speech, ok, "Turned off Flashlight", isReversible = true, undoAction = "FLASHLIGHT_ON")
             recordLastIntent(res)
             return res
         }
 
         // 7. Battery status
         if (matchesAny(text, listOf("battery", "battery status", "battery percentage", "how much battery", "check battery", "battery kitni hai", "charge kitna hai", "battery charge", "kitna charge bacha hai"))) {
-            val info = deviceController.getBatteryInfo()
-            val res = IntentExecutionResult("BATTERY_STATUS", emptyMap(), info, true, "Checked Battery Status")
+            val rawInfo = deviceController.getBatteryInfo()
+            val speech = if (isHindiMode(text)) {
+                rawInfo.replace("Your battery is at ", "आपकी बैटरी ")
+                    .replace(" and is currently charging.", "% है और फोन चार्ज हो रहा है।")
+                    .replace(".", "% है।")
+            } else if (isHinglishMode(text) || text.contains("kitni") || text.contains("kitna")) {
+                rawInfo.replace("Your battery is at ", "Aapki battery ")
+                    .replace(" and is currently charging.", "% hai aur charging chal rahi hai.")
+                    .replace(".", "% hai.")
+            } else {
+                rawInfo
+            }
+            val res = IntentExecutionResult("BATTERY_STATUS", emptyMap(), speech, true, "Checked Battery Status")
             recordLastIntent(res)
             return res
         }
@@ -333,13 +406,27 @@ class SiriIntentParser(
         // 9. Time & Date
         if (matchesAny(text, listOf("what time is it", "what's the time", "current time", "samay kya hai", "time kya hua hai", "time batao", "kitne baje hain"))) {
             val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date())
-            val res = IntentExecutionResult("TIME", emptyMap(), "It is $time.", true, "Checked Time")
+            val speech = if (isHindiMode(text)) {
+                "अभी समय $time हुआ है।"
+            } else if (isHinglishMode(text) || text.contains("samay") || text.contains("kitne baje")) {
+                "Abhi samay $time ho raha hai."
+            } else {
+                "It is $time."
+            }
+            val res = IntentExecutionResult("TIME", emptyMap(), speech, true, "Checked Time")
             recordLastIntent(res)
             return res
         }
         if (matchesAny(text, listOf("what is today's date", "what's the date", "today's date", "aaj konsi tarikh hai", "aaj ki date kya hai", "current date", "aaj konsa din hai"))) {
             val date = SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.getDefault()).format(Date())
-            val res = IntentExecutionResult("DATE", emptyMap(), "Today is $date.", true, "Checked Date")
+            val speech = if (isHindiMode(text)) {
+                "आज की तारीख $date है।"
+            } else if (isHinglishMode(text) || text.contains("aaj")) {
+                "Aaj ki date $date hai."
+            } else {
+                "Today is $date."
+            }
+            val res = IntentExecutionResult("DATE", emptyMap(), speech, true, "Checked Date")
             recordLastIntent(res)
             return res
         }

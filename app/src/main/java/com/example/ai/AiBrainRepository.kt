@@ -146,18 +146,23 @@ class AiBrainRepository(private val context: Context) {
         val isCustomApi = config.provider == "Custom / OpenAI API" || config.customEndpoint.isNotBlank()
 
         if (apiKey.isBlank() && !isCustomApi) {
+            val offlineMsg = when (language) {
+                LanguageOption.HINDI -> "मैं अभी ऑफलाइन मोड में चल रही हूँ क्योंकि कोई API key सेट नहीं है। आप अलार्म, ऐप्स, फ्लैशलाइट, समय और बैटरी जैसी सुविधाएं इस्तेमाल कर सकते हैं, या सेटिंग्स में अपनी API key दर्ज कर सकते हैं।"
+                LanguageOption.HINGLISH -> "Main abhi offline mode mein hoon kyunki API key configured nahi hai. Aap alarms, apps, flashlight, battery aur local tasks use kar sakte hain, ya Settings mein API key add kar sakte hain."
+                LanguageOption.ENGLISH, LanguageOption.AUTO -> "I am running in offline mode because no API key is configured. You can control flashlight, apps, alarms, battery and device tasks, or configure your API key in Settings."
+            }
             return@withContext AiGenerationResult(
-                text = "I am running in offline mode because no API key is configured. You can set alarms, open apps, control flashlight, check battery, and manage tasks, or configure your API key in Settings.",
+                text = offlineMsg,
                 latencyMs = 5L,
                 isSuccess = false
             )
         }
 
         val langInstruction = when (language) {
-            LanguageOption.HINDI -> "Reply fluently in natural Hindi (using Devanagari script). Keep the response conversational, warm, and concise in 1-2 spoken sentences (max 3). Never use markdown, asterisks, or bullet points."
-            LanguageOption.HINGLISH -> "Reply in friendly, everyday Hinglish (natural Hindi-English mix written in Latin alphabet, e.g., 'Haan bilkul, maine alarm set kar diya hai!'). Keep it warm, natural, and concise in 1-2 spoken sentences (max 3). Never use markdown."
-            LanguageOption.ENGLISH -> "Reply in fluent, natural English. Keep it conversational, calm, and concise in 1-2 spoken sentences suitable for voice speech. Avoid robotic chatbot clichés and never use markdown, asterisks, or bullet points."
-            LanguageOption.AUTO -> "Detect whether the user is speaking English, Hindi, or Hinglish, and reply fluently in that exact matching language style. Keep it conversational and voice-ready in 1-2 sentences without any markdown."
+            LanguageOption.HINDI -> "STRICT LANGUAGE REQUIREMENT: You MUST reply entirely in natural, polished Hindi using the Devanagari script (हिन्दी). Do NOT use English or Latin letters. Keep the response conversational, warm, and concise in 1-2 spoken sentences (maximum 3). Never use markdown, asterisks, bullet points, or robotic filler."
+            LanguageOption.HINGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in friendly, conversational everyday Hinglish (natural Hindi-English mix written entirely in the Latin/Roman alphabet, e.g. 'Haan bilkul, maine yeh kar diya hai! Aap aur kuch poochna chahte hain?'). Keep it warm, natural, and concise in 1-2 spoken sentences (maximum 3). Never use markdown, asterisks, or bullet points."
+            LanguageOption.ENGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in fluent, natural English. Keep it conversational, calm, and concise in 1-2 spoken sentences suitable for voice speech. Avoid robotic chatbot clichés and never use markdown, asterisks, or bullet points."
+            LanguageOption.AUTO -> "Detect whether the user is speaking English, Hindi (Devanagari), or Hinglish (Latin alphabet), and reply fluently in that exact matching language style. Keep it conversational and voice-ready in 1-2 sentences without any markdown."
         }
 
         val currentTimeDate = java.text.SimpleDateFormat("EEEE, MMMM d, yyyy h:mm a", java.util.Locale.getDefault()).format(java.util.Date())

@@ -1,0 +1,6 @@
+{
+  "name": "Siri AI",
+  "description": "Advanced AI voice assistant with voice conversations, Android system control, smart automation, visual intelligence, and privacy controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

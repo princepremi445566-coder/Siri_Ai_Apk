@@ -10,12 +10,16 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -132,7 +136,7 @@ fun PrivacyScreen(
 
     val scrollState = rememberScrollState()
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(
@@ -145,11 +149,14 @@ fun PrivacyScreen(
                 )
             )
     ) {
+        val horizontalPadding = if (maxWidth < 380.dp) 14.dp else 20.dp
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .verticalScroll(scrollState)
-                .padding(20.dp)
+                .padding(horizontal = horizontalPadding, vertical = 16.dp)
         ) {
             // Header
             Row(
@@ -171,7 +178,7 @@ fun PrivacyScreen(
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Privacy & Security Dashboard",
                         color = SiriTextPrimary,
@@ -264,40 +271,80 @@ fun PrivacyScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = editHome,
-                            onValueChange = { editHome = it },
-                            label = { Text("Home Area", color = SiriTextSecondary, fontSize = 12.sp) },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = SiriCyan,
-                                unfocusedBorderColor = Color(0xFF28364D),
-                                focusedContainerColor = Color(0xFF152030),
-                                unfocusedContainerColor = Color(0xFF152030),
-                                focusedTextColor = SiriTextPrimary,
-                                unfocusedTextColor = SiriTextPrimary
-                            )
-                        )
-                        OutlinedTextField(
-                            value = editWork,
-                            onValueChange = { editWork = it },
-                            label = { Text("Work Area", color = SiriTextSecondary, fontSize = 12.sp) },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = SiriCyan,
-                                unfocusedBorderColor = Color(0xFF28364D),
-                                focusedContainerColor = Color(0xFF152030),
-                                unfocusedContainerColor = Color(0xFF152030),
-                                focusedTextColor = SiriTextPrimary,
-                                unfocusedTextColor = SiriTextPrimary
-                            )
-                        )
+                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                        if (maxWidth < 330.dp) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = editHome,
+                                    onValueChange = { editHome = it },
+                                    label = { Text("Home Area", color = SiriTextSecondary, fontSize = 12.sp) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriCyan,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF152030),
+                                        unfocusedContainerColor = Color(0xFF152030),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    )
+                                )
+                                OutlinedTextField(
+                                    value = editWork,
+                                    onValueChange = { editWork = it },
+                                    label = { Text("Work Area", color = SiriTextSecondary, fontSize = 12.sp) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriCyan,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF152030),
+                                        unfocusedContainerColor = Color(0xFF152030),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    )
+                                )
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = editHome,
+                                    onValueChange = { editHome = it },
+                                    label = { Text("Home Area", color = SiriTextSecondary, fontSize = 12.sp) },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriCyan,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF152030),
+                                        unfocusedContainerColor = Color(0xFF152030),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    )
+                                )
+                                OutlinedTextField(
+                                    value = editWork,
+                                    onValueChange = { editWork = it },
+                                    label = { Text("Work Area", color = SiriTextSecondary, fontSize = 12.sp) },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriCyan,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF152030),
+                                        unfocusedContainerColor = Color(0xFF152030),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    )
+                                )
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -314,7 +361,8 @@ fun PrivacyScreen(
                             Toast.makeText(context, "Saved assistant preferences", Toast.LENGTH_SHORT).show()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = SiriCyan),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.defaultMinSize(minHeight = 48.dp)
                     ) {
                         Text("Save Profile", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
@@ -350,6 +398,7 @@ fun PrivacyScreen(
                             Text("Filter Sensitive OTPs & Bank Codes", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text("Excludes one-time verification codes and bank alerts from voice readouts", color = SiriTextSecondary, fontSize = 11.sp)
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
                         Switch(
                             checked = userPrefs.filterSensitiveNotifications,
                             onCheckedChange = {
@@ -371,6 +420,7 @@ fun PrivacyScreen(
                             Text("Quiet Hours (10:00 PM - 07:00 AM)", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text("Silences spoken notifications and proactive voice announcements during nighttime", color = SiriTextSecondary, fontSize = 11.sp)
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
                         Switch(
                             checked = userPrefs.quietHoursEnabled,
                             onCheckedChange = {
@@ -464,7 +514,9 @@ fun PrivacyScreen(
                         onClick = { showDeleteConfirmDialog = true },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF421D24)),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("clear_history_button")
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("clear_history_button")
                     ) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
@@ -490,7 +542,9 @@ fun PrivacyScreen(
                         onClick = { showWipeAllConfirmDialog = true },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5E1B24)),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("wipe_all_data_button")
+                        modifier = Modifier
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("wipe_all_data_button")
                     ) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color(0xFFFF5252), modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
@@ -570,8 +624,7 @@ private fun PermissionAuditCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -584,9 +637,15 @@ private fun PermissionAuditCard(
                     Icon(icon, contentDescription = null, tint = if (isGranted) SiriGreen else SiriTextSecondary, modifier = Modifier.size(18.dp))
                 }
                 Spacer(modifier = Modifier.width(12.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(title, color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(
+                            text = title,
+                            color = SiriTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
                         Icon(
                             imageVector = if (isGranted) Icons.Default.CheckCircle else Icons.Default.Warning,
@@ -600,12 +659,15 @@ private fun PermissionAuditCard(
             }
 
             if (!isGranted) {
+                Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = onOpenSettings,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E2A3C)),
-                    shape = RoundedCornerShape(8.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.defaultMinSize(minHeight = 44.dp)
                 ) {
-                    Text("Enable", color = SiriCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Enable", color = SiriCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
                 }
             }
         }

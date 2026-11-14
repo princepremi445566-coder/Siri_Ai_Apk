@@ -11,22 +11,28 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -65,6 +71,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.InformationFreshness
@@ -156,7 +163,7 @@ fun VoiceAssistantScreen(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(
@@ -169,24 +176,29 @@ fun VoiceAssistantScreen(
                 )
             )
     ) {
+        val horizontalPadding = if (maxWidth < 380.dp) 12.dp else 20.dp
+        val isCompactWidth = maxWidth < 360.dp
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 10.dp),
+                .imePadding()
+                .padding(horizontal = horizontalPadding, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Top Status Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 6.dp),
+                    .padding(top = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Language & Mic Status Chips
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // Language & Mic Status Chips (wraps cleanly on narrow screens)
+                FlowRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Surface(
                         color = SiriDarkSurfaceVariant,
@@ -194,7 +206,7 @@ fun VoiceAssistantScreen(
                         border = androidx.compose.foundation.BorderStroke(1.dp, SiriCyan.copy(alpha = 0.4f))
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
@@ -203,12 +215,14 @@ fun VoiceAssistantScreen(
                                     .clip(CircleShape)
                                     .background(if (voiceState == VoiceState.LISTENING) Color(0xFF00E676) else SiriCyan)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
                             Text(
                                 text = if (voiceState == VoiceState.LISTENING) "Mic Live" else language.displayName,
                                 color = if (voiceState == VoiceState.LISTENING) Color(0xFF00E676) else SiriTextPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
+                                fontSize = if (isCompactWidth) 11.sp else 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -235,23 +249,28 @@ fun VoiceAssistantScreen(
                                 VoiceGender.SYSTEM_DEFAULT -> "⚙️ System Voice"
                             },
                             color = SiriMagenta,
-                            fontSize = 12.sp,
+                            fontSize = if (isCompactWidth) 11.sp else 12.sp,
                             fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
                         )
                     }
                 }
 
+                Spacer(modifier = Modifier.width(8.dp))
+
                 // Daily Briefing, Flashlight, New Chat, and History Quick Toggles
+                val actionIconSize = if (isCompactWidth) 34.dp else 36.dp
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (isCompactWidth) 4.dp else 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Daily Briefing shortcut
                     IconButton(
                         onClick = { viewModel.triggerDailyBriefing() },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(actionIconSize)
                             .clip(CircleShape)
                             .background(SiriDarkSurfaceVariant)
                             .testTag("daily_briefing_button")
@@ -271,7 +290,7 @@ fun VoiceAssistantScreen(
                             Toast.makeText(context, "Started new conversation", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(actionIconSize)
                             .clip(CircleShape)
                             .background(SiriDarkSurfaceVariant)
                             .testTag("new_session_button")
@@ -288,7 +307,7 @@ fun VoiceAssistantScreen(
                     IconButton(
                         onClick = { viewModel.toggleFlashlight() },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(actionIconSize)
                             .clip(CircleShape)
                             .background(if (isTorchOn) SiriCyan.copy(alpha = 0.25f) else SiriDarkSurfaceVariant)
                             .testTag("flashlight_toggle_button")
@@ -305,7 +324,7 @@ fun VoiceAssistantScreen(
                     IconButton(
                         onClick = { showHistoryDialog = !showHistoryDialog },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(actionIconSize)
                             .clip(CircleShape)
                             .background(if (showHistoryDialog) SiriViolet.copy(alpha = 0.25f) else SiriDarkSurfaceVariant)
                             .testTag("history_toggle_button")
@@ -320,238 +339,271 @@ fun VoiceAssistantScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Main Siri Orb Experience
             if (!showHistoryDialog) {
-                Spacer(modifier = Modifier.weight(0.35f))
-
-                // Interactive 3D Siri Orb
-                SiriOrb(
-                    voiceState = voiceState,
-                    audioLevel = audioLevel,
-                    reducedMotion = userPrefs.reducedMotion,
-                    onClick = {
-                        if (voiceState == VoiceState.LISTENING) {
-                            viewModel.stopListening()
-                        } else if (voiceState == VoiceState.SPEAKING) {
-                            // Instant voice interruption and transition to listening for follow-up
-                            viewModel.stopAllSpeech()
-                            startVoiceWithPermissionCheck()
-                        } else {
-                            startVoiceWithPermissionCheck()
-                        }
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Voice State Indicator Text
-                val stateText = when (voiceState) {
-                    VoiceState.LISTENING -> "Listening..."
-                    VoiceState.THINKING -> "Thinking..."
-                    VoiceState.SPEAKING -> "Speaking..."
-                    VoiceState.ERROR -> "Something went wrong"
-                    VoiceState.IDLE -> "Tap orb or mic to speak"
-                }
-
-                Text(
-                    text = stateText,
-                    color = when (voiceState) {
-                        VoiceState.LISTENING -> SiriLightGold
-                        VoiceState.THINKING -> SiriWarmGold
-                        VoiceState.SPEAKING -> SiriGold
-                        VoiceState.ERROR -> Color(0xFFFF5252)
-                        VoiceState.IDLE -> SiriTextSecondary
-                    },
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Live Transcript / Response Preview Card
-                val lastMsg = currentSessionMessages.lastOrNull()
-                val displayText = when {
-                    voiceState == VoiceState.LISTENING -> transcription.ifBlank { "Listening..." }
-                    voiceState == VoiceState.THINKING -> "Thinking..."
-                    lastSpeech.isNotBlank() -> lastSpeech
-                    lastMsg != null -> lastMsg.text
-                    else -> if (userAddress.equals("Friend", ignoreCase = true)) {
-                        "How can I help you?"
-                    } else {
-                        "How can I help you, $userAddress?"
-                    }
-                }
-
-                Card(
+                BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = SiriDarkSurfaceVariant.copy(alpha = 0.85f)),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF28364D))
+                        .weight(1f)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
+                    val adaptiveOrbSize = minOf(maxWidth * 0.56f, maxHeight * 0.40f).coerceIn(132.dp, 240.dp)
+                    val middleScrollState = rememberScrollState()
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(middleScrollState),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = if (voiceState == VoiceState.LISTENING) "You:" else "$assistantName:",
-                                    color = if (voiceState == VoiceState.LISTENING) SiriLightGold else SiriGold,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                            // Interactive 3D Siri Orb
+                            SiriOrb(
+                                voiceState = voiceState,
+                                audioLevel = audioLevel,
+                                reducedMotion = userPrefs.reducedMotion,
+                                orbSize = adaptiveOrbSize,
+                                onClick = {
+                                    if (voiceState == VoiceState.LISTENING) {
+                                        viewModel.stopListening()
+                                    } else if (voiceState == VoiceState.SPEAKING) {
+                                        // Instant voice interruption and transition to listening for follow-up
+                                        viewModel.stopAllSpeech()
+                                        startVoiceWithPermissionCheck()
+                                    } else {
+                                        startVoiceWithPermissionCheck()
+                                    }
+                                }
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Voice State Indicator Text
+                            val stateText = when (voiceState) {
+                                VoiceState.LISTENING -> "Listening..."
+                                VoiceState.THINKING -> "Thinking..."
+                                VoiceState.SPEAKING -> "Speaking..."
+                                VoiceState.ERROR -> "Something went wrong"
+                                VoiceState.IDLE -> "Tap orb or mic to speak"
                             }
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Speak / Read Aloud button
-                                if (displayText.isNotBlank() && voiceState == VoiceState.IDLE) {
-                                    IconButton(
-                                        onClick = { viewModel.speakAloud(displayText) },
-                                        modifier = Modifier.size(28.dp).testTag("read_aloud_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                            contentDescription = "Read Aloud",
-                                            tint = SiriCyan,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
+                            Text(
+                                text = stateText,
+                                color = when (voiceState) {
+                                    VoiceState.LISTENING -> SiriLightGold
+                                    VoiceState.THINKING -> SiriWarmGold
+                                    VoiceState.SPEAKING -> SiriGold
+                                    VoiceState.ERROR -> Color(0xFFFF5252)
+                                    VoiceState.IDLE -> SiriTextSecondary
+                                },
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
 
-                                // Copy response icon
-                                if (displayText.isNotBlank()) {
-                                    IconButton(
-                                        onClick = { viewModel.copyResponseToClipboard(displayText) },
-                                        modifier = Modifier.size(28.dp).testTag("copy_response_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "Copy Response",
-                                            tint = SiriTextSecondary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                                if (voiceState == VoiceState.SPEAKING) {
-                                    IconButton(
-                                        onClick = { viewModel.stopAllSpeech() },
-                                        modifier = Modifier.size(28.dp).testTag("stop_speech_small_button")
+                            // Live Transcript / Response Preview Card
+                            val lastMsg = currentSessionMessages.lastOrNull()
+                            val displayText = when {
+                                voiceState == VoiceState.LISTENING -> transcription.ifBlank { "Listening..." }
+                                voiceState == VoiceState.THINKING -> "Thinking..."
+                                lastSpeech.isNotBlank() -> lastSpeech
+                                lastMsg != null -> lastMsg.text
+                                else -> if (userAddress.equals("Friend", ignoreCase = true)) {
+                                    "How can I help you?"
+                                } else {
+                                    "How can I help you, $userAddress?"
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 2.dp),
+                                shape = RoundedCornerShape(18.dp),
+                                colors = CardDefaults.cardColors(containerColor = SiriDarkSurfaceVariant.copy(alpha = 0.85f)),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF28364D))
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Stop,
-                                            contentDescription = "Stop",
-                                            tint = SiriMagenta,
-                                            modifier = Modifier.size(18.dp)
+                                        Text(
+                                            text = if (voiceState == VoiceState.LISTENING) "You:" else "$assistantName:",
+                                            color = if (voiceState == VoiceState.LISTENING) SiriLightGold else SiriGold,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
                                         )
+
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            // Speak / Read Aloud button
+                                            if (displayText.isNotBlank() && voiceState == VoiceState.IDLE) {
+                                                IconButton(
+                                                    onClick = { viewModel.speakAloud(displayText) },
+                                                    modifier = Modifier.size(32.dp).testTag("read_aloud_button")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                                        contentDescription = "Read Aloud",
+                                                        tint = SiriCyan,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            // Copy response icon
+                                            if (displayText.isNotBlank()) {
+                                                IconButton(
+                                                    onClick = { viewModel.copyResponseToClipboard(displayText) },
+                                                    modifier = Modifier.size(32.dp).testTag("copy_response_button")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.ContentCopy,
+                                                        contentDescription = "Copy Response",
+                                                        tint = SiriTextSecondary,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            if (voiceState == VoiceState.SPEAKING) {
+                                                IconButton(
+                                                    onClick = { viewModel.stopAllSpeech() },
+                                                    modifier = Modifier.size(32.dp).testTag("stop_speech_small_button")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Stop,
+                                                        contentDescription = "Stop",
+                                                        tint = SiriMagenta,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = displayText,
+                                        color = SiriTextPrimary,
+                                        fontSize = 13.sp,
+                                        lineHeight = 20.sp
+                                    )
+
+                                    // Grounded Source Links
+                                    if (lastMsg != null && lastMsg.sources.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            for (src in lastMsg.sources) {
+                                                Surface(
+                                                    color = Color(0xFF1B283E),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    border = androidx.compose.foundation.BorderStroke(1.dp, SiriCyan.copy(alpha = 0.3f)),
+                                                    modifier = Modifier.clickable {
+                                                        viewModel.deviceController.openApp(src.url)
+                                                    }
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(Icons.Default.Link, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(12.dp))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(
+                                                            src.title,
+                                                            color = SiriCyan,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Medium,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = displayText,
-                            color = SiriTextPrimary,
-                            fontSize = 13.sp,
-                            lineHeight = 20.sp
-                        )
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        // Grounded Source Links
-                        if (lastMsg != null && lastMsg.sources.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
+                        // Quick Command Action Chips
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "Quick Actions",
+                                color = SiriTextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp)
+                            )
+
                             FlowRow(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                for (src in lastMsg.sources) {
+                                val quickCommands = listOf(
+                                    "☀️ Daily Briefing",
+                                    "Tell me a joke",
+                                    "What is 0 / 0?",
+                                    "Who are you?",
+                                    "Turn on Flashlight",
+                                    "Battery Status",
+                                    "Koi chutkula sunao",
+                                    "What can you do?",
+                                    "↩️ Undo Action"
+                                )
+
+                                for (cmd in quickCommands) {
+                                    val cleanCmd = cmd.replace("☀️ ", "").replace("↩️ ", "")
                                     Surface(
-                                        color = Color(0xFF1B283E),
-                                        shape = RoundedCornerShape(8.dp),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, SiriCyan.copy(alpha = 0.3f)),
-                                        modifier = Modifier.clickable {
-                                            viewModel.deviceController.openApp(src.url)
-                                        }
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = SiriDarkSurfaceVariant,
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2E3E58)),
+                                        modifier = Modifier
+                                            .clickable {
+                                                if (cmd.contains("Daily Briefing")) {
+                                                    viewModel.triggerDailyBriefing()
+                                                } else if (cmd.contains("Undo Action")) {
+                                                    viewModel.handleUserUtterance("undo")
+                                                } else {
+                                                    viewModel.handleUserUtterance(cleanCmd)
+                                                }
+                                            }
+                                            .testTag("quick_action_${cleanCmd.replace(" ", "_").lowercase()}")
                                     ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(Icons.Default.Link, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(12.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(src.title, color = SiriCyan, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                                        }
+                                        Text(
+                                            text = cmd,
+                                            color = SiriTextPrimary,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                                        )
                                     }
                                 }
                             }
+                            Spacer(modifier = Modifier.height(6.dp))
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.weight(0.35f))
-
-                // Quick Command Action Chips
-                Text(
-                    text = "Quick Actions",
-                    color = SiriTextSecondary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
-                )
-
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    maxItemsInEachRow = 3
-                ) {
-                    val quickCommands = listOf(
-                        "☀️ Daily Briefing",
-                        "Tell me a joke",
-                        "What is 0 / 0?",
-                        "Who are you?",
-                        "Turn on Flashlight",
-                        "Battery Status",
-                        "Koi chutkula sunao",
-                        "What can you do?",
-                        "↩️ Undo Action"
-                    )
-
-                    for (cmd in quickCommands) {
-                        val cleanCmd = cmd.replace("☀️ ", "").replace("↩️ ", "")
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = SiriDarkSurfaceVariant,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2E3E58)),
-                            modifier = Modifier
-                                .clickable {
-                                    if (cmd.contains("Daily Briefing")) {
-                                        viewModel.triggerDailyBriefing()
-                                    } else if (cmd.contains("Undo Action")) {
-                                        viewModel.handleUserUtterance("undo")
-                                    } else {
-                                        viewModel.handleUserUtterance(cleanCmd)
-                                    }
-                                }
-                                .testTag("quick_action_${cleanCmd.replace(" ", "_").lowercase()}")
-                        ) {
-                            Text(
-                                text = cmd,
-                                color = SiriTextPrimary,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
             } else {
                 // Conversation History & Session Management View
                 Column(
@@ -568,7 +620,10 @@ fun VoiceAssistantScreen(
                             text = "Conversations & Sessions",
                             color = SiriTextPrimary,
                             fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
@@ -675,12 +730,18 @@ fun VoiceAssistantScreen(
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.weight(1f)
+                                            ) {
                                                 Text(
                                                     text = if (isUser) "You" else assistantName,
                                                     color = if (isUser) SiriCyan else SiriMagenta,
                                                     fontWeight = FontWeight.Bold,
-                                                    fontSize = 11.sp
+                                                    fontSize = 11.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f, fill = false)
                                                 )
                                                 if (!isUser) {
                                                     Spacer(modifier = Modifier.width(6.dp))
@@ -692,14 +753,16 @@ fun VoiceAssistantScreen(
                                                             text = msg.freshness.label,
                                                             color = Color(msg.freshness.badgeColorHex),
                                                             fontSize = 8.sp,
+                                                            maxLines = 1,
                                                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                                         )
                                                     }
                                                 }
                                             }
+                                            Spacer(modifier = Modifier.width(6.dp))
                                             IconButton(
                                                 onClick = { viewModel.copyResponseToClipboard(msg.text) },
-                                                modifier = Modifier.size(20.dp)
+                                                modifier = Modifier.size(24.dp)
                                             ) {
                                                 Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = SiriTextSecondary, modifier = Modifier.size(13.dp))
                                             }

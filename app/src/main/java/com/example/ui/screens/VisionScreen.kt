@@ -10,14 +10,18 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,6 +63,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -94,7 +100,7 @@ fun VisionScreen(
 
     val scrollState = rememberScrollState()
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(
@@ -107,11 +113,15 @@ fun VisionScreen(
                 )
             )
     ) {
+        val horizontalPadding = if (maxWidth < 380.dp) 14.dp else 20.dp
+        val isShortScreen = maxHeight < 640.dp
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .verticalScroll(scrollState)
-                .padding(20.dp),
+                .padding(horizontal = horizontalPadding, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Header
@@ -134,7 +144,7 @@ fun VisionScreen(
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Camera Vision & Screen AI",
                         color = SiriTextPrimary,
@@ -149,7 +159,7 @@ fun VisionScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
             // Image Selection Card
             Card(
@@ -166,7 +176,7 @@ fun VisionScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(220.dp)
+                                .height(if (isShortScreen) 180.dp else 220.dp)
                                 .clip(RoundedCornerShape(14.dp))
                                 .border(1.dp, SiriViolet.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
                         ) {
@@ -181,7 +191,7 @@ fun VisionScreen(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
                                     .padding(8.dp)
-                                    .size(32.dp)
+                                    .size(36.dp)
                                     .clip(CircleShape)
                                     .background(Color.Black.copy(alpha = 0.6f))
                                     .testTag("clear_selected_image_button")
@@ -194,13 +204,14 @@ fun VisionScreen(
                             text = "Image ready for Siri AI analysis",
                             color = SiriCyan,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
                         )
                     } else {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(160.dp)
+                                .defaultMinSize(minHeight = if (isShortScreen) 136.dp else 160.dp)
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(Color(0xFF141C2A))
                                 .clickable {
@@ -211,24 +222,30 @@ fun VisionScreen(
                                 .testTag("select_photo_area"),
                             contentAlignment = Alignment.Center
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
                                 Icon(
                                     imageVector = Icons.Default.AddPhotoAlternate,
                                     contentDescription = null,
                                     tint = SiriCyan,
-                                    modifier = Modifier.size(44.dp)
+                                    modifier = Modifier.size(40.dp)
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
                                     text = "Select Photo or Screenshot to Analyze",
                                     color = SiriTextPrimary,
                                     fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center
                                 )
+                                Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = "Tap to choose from Gallery or Camera",
                                     color = SiriTextSecondary,
-                                    fontSize = 12.sp
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.Center
                                 )
                             }
                         }
@@ -236,38 +253,85 @@ fun VisionScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                photoPickerLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D283A)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("choose_photo_button")
-                        ) {
-                            Icon(Icons.Default.Image, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Choose Photo", color = SiriTextPrimary, fontSize = 13.sp)
-                        }
+                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                        if (maxWidth < 310.dp) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D283A)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .testTag("choose_photo_button")
+                                ) {
+                                    Icon(Icons.Default.Image, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Choose Photo", color = SiriTextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
 
-                        Button(
-                            onClick = { viewModel.deviceController.openCameraApp() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D283A)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("launch_camera_button")
-                        ) {
-                            Icon(Icons.Default.CenterFocusStrong, contentDescription = null, tint = SiriMagenta, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Open Camera", color = SiriTextPrimary, fontSize = 13.sp)
+                                Button(
+                                    onClick = { viewModel.deviceController.openCameraApp() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D283A)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .testTag("launch_camera_button")
+                                ) {
+                                    Icon(Icons.Default.CenterFocusStrong, contentDescription = null, tint = SiriMagenta, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Open Camera", color = SiriTextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D283A)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .testTag("choose_photo_button")
+                                ) {
+                                    Icon(Icons.Default.Image, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Choose Photo", color = SiriTextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+
+                                Button(
+                                    onClick = { viewModel.deviceController.openCameraApp() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D283A)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 12.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .testTag("launch_camera_button")
+                                ) {
+                                    Icon(Icons.Default.CenterFocusStrong, contentDescription = null, tint = SiriMagenta, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Open Camera", color = SiriTextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
                         }
                     }
                 }
@@ -389,7 +453,8 @@ fun VisionScreen(
                         Text(
                             text = "Siri Vision AI is analyzing image pixels and text...",
                             color = SiriTextPrimary,
-                            fontSize = 14.sp
+                            fontSize = 14.sp,
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -410,11 +475,13 @@ fun VisionScreen(
                                 text = "Siri Vision Analysis",
                                 color = SiriViolet,
                                 fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
                             )
                             Button(
                                 onClick = { viewModel.speakAloud(lastSpeech) },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Text("Speak", color = SiriCyan, fontSize = 12.sp)

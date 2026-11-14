@@ -15,9 +15,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
@@ -27,11 +34,17 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -254,61 +267,128 @@ fun MainContent(viewModel: SiriViewModel) {
         )
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = SiriDarkBackground,
-        bottomBar = {
-            NavigationBar(
-                containerColor = SiriDarkSurface,
-                contentColor = SiriTextPrimary,
-                tonalElevation = 6.dp,
-                modifier = Modifier
-                    .navigationBarsPadding()
-                    .testTag("siri_bottom_nav_bar")
-            ) {
-                for (tab in SiriTab.values()) {
-                    val isSelected = selectedTab == tab
-                    NavigationBarItem(
-                        selected = isSelected,
-                        onClick = { selectedTab = tab },
-                        icon = {
-                            Icon(
-                                imageVector = tab.icon,
-                                contentDescription = tab.title,
-                                tint = if (isSelected) SiriCyan else SiriTextSecondary
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val useNavigationRail = maxWidth >= 600.dp
+
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = SiriDarkBackground,
+            contentWindowInsets = WindowInsets.safeDrawing.only(
+                WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+            ),
+            bottomBar = {
+                if (!useNavigationRail) {
+                    NavigationBar(
+                        containerColor = SiriDarkSurface,
+                        contentColor = SiriTextPrimary,
+                        tonalElevation = 6.dp,
+                        windowInsets = NavigationBarDefaults.windowInsets,
+                        modifier = Modifier.testTag("siri_bottom_nav_bar")
+                    ) {
+                        for (tab in SiriTab.values()) {
+                            val isSelected = selectedTab == tab
+                            NavigationBarItem(
+                                selected = isSelected,
+                                onClick = { selectedTab = tab },
+                                icon = {
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = tab.title,
+                                        tint = if (isSelected) SiriCyan else SiriTextSecondary
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = tab.title,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = if (isSelected) SiriCyan else SiriTextSecondary
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = SiriCyan,
+                                    unselectedIconColor = SiriTextSecondary,
+                                    selectedTextColor = SiriCyan,
+                                    unselectedTextColor = SiriTextSecondary,
+                                    indicatorColor = SiriDarkSurfaceVariant
+                                ),
+                                modifier = Modifier.testTag(tab.tag)
                             )
-                        },
-                        label = {
-                            Text(
-                                text = tab.title,
-                                fontSize = 11.sp,
-                                color = if (isSelected) SiriCyan else SiriTextSecondary
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = SiriCyan,
-                            unselectedIconColor = SiriTextSecondary,
-                            selectedTextColor = SiriCyan,
-                            unselectedTextColor = SiriTextSecondary,
-                            indicatorColor = SiriDarkSurfaceVariant
-                        ),
-                        modifier = Modifier.testTag(tab.tag)
-                    )
+                        }
+                    }
                 }
             }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (selectedTab) {
-                SiriTab.ASSISTANT -> VoiceAssistantScreen(viewModel = viewModel)
-                SiriTab.VISION -> VisionScreen(viewModel = viewModel)
-                SiriTab.PRODUCTIVITY -> ProductivityScreen(viewModel = viewModel)
-                SiriTab.AI_STUDIO -> AiStudioScreen(viewModel = viewModel)
-                SiriTab.PRIVACY -> PrivacyScreen(viewModel = viewModel)
+        ) { innerPadding ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                if (useNavigationRail) {
+                    NavigationRail(
+                        containerColor = SiriDarkSurface,
+                        contentColor = SiriTextPrimary,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .testTag("siri_bottom_nav_bar")
+                    ) {
+                        for (tab in SiriTab.values()) {
+                            val isSelected = selectedTab == tab
+                            NavigationRailItem(
+                                selected = isSelected,
+                                onClick = { selectedTab = tab },
+                                icon = {
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = tab.title,
+                                        tint = if (isSelected) SiriCyan else SiriTextSecondary
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = tab.title,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = if (isSelected) SiriCyan else SiriTextSecondary
+                                    )
+                                },
+                                colors = NavigationRailItemDefaults.colors(
+                                    selectedIconColor = SiriCyan,
+                                    unselectedIconColor = SiriTextSecondary,
+                                    selectedTextColor = SiriCyan,
+                                    unselectedTextColor = SiriTextSecondary,
+                                    indicatorColor = SiriDarkSurfaceVariant
+                                ),
+                                modifier = Modifier.testTag(tab.tag)
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .widthIn(max = 720.dp)
+                    ) {
+                        when (selectedTab) {
+                            SiriTab.ASSISTANT -> VoiceAssistantScreen(viewModel = viewModel)
+                            SiriTab.VISION -> VisionScreen(viewModel = viewModel)
+                            SiriTab.PRODUCTIVITY -> ProductivityScreen(viewModel = viewModel)
+                            SiriTab.AI_STUDIO -> AiStudioScreen(viewModel = viewModel)
+                            SiriTab.PRIVACY -> PrivacyScreen(viewModel = viewModel)
+                        }
+                    }
+                }
             }
         }
     }

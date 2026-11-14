@@ -28,6 +28,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.model.VoiceState
 import com.example.ui.theme.SiriChampagneGold
@@ -60,6 +62,7 @@ fun SiriOrb(
     voiceState: VoiceState,
     audioLevel: Float,
     modifier: Modifier = Modifier,
+    orbSize: Dp = 240.dp,
     reducedMotion: Boolean = false,
     onClick: () -> Unit = {}
 ) {
@@ -158,7 +161,8 @@ fun SiriOrb(
 
     Box(
         modifier = modifier
-            .size(280.dp)
+            .size(orbSize)
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
             .testTag("siri_voice_orb")
             .clickable(
                 interactionSource = interactionSource,

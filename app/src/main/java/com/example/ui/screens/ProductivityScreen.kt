@@ -6,14 +6,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -69,7 +73,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AutomationRoutine
@@ -163,7 +169,7 @@ fun ProductivityScreen(
         taskPriorityFilter == "All" || it.priority.equals(taskPriorityFilter, ignoreCase = true)
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(
@@ -176,11 +182,15 @@ fun ProductivityScreen(
                 )
             )
     ) {
+        val horizontalPadding = if (maxWidth < 380.dp) 14.dp else 20.dp
+        val smartHomeColumns = if (maxWidth < 310.dp) 1 else 2
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .verticalScroll(scrollState)
-                .padding(20.dp)
+                .padding(horizontal = horizontalPadding, vertical = 16.dp)
         ) {
             // Screen Header
             Row(
@@ -202,7 +212,7 @@ fun ProductivityScreen(
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Productivity & Learning",
                         color = SiriTextPrimary,
@@ -219,10 +229,11 @@ fun ProductivityScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Sub-Navigation Pills
-            Row(
+            // Sub-Navigation Pills (wraps cleanly on all screen widths without clipping)
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 for (tab in ProductivityTab.values()) {
                     val isSelected = selectedSubTab == tab
@@ -234,17 +245,22 @@ fun ProductivityScreen(
                             if (isSelected) SiriCyan else Color(0xFF28364D)
                         ),
                         modifier = Modifier
-                            .weight(1f)
+                            .defaultMinSize(minHeight = 40.dp)
                             .clickable { selectedSubTab = tab }
                     ) {
-                        Text(
-                            text = tab.label,
-                            color = if (isSelected) SiriCyan else SiriTextSecondary,
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            modifier = Modifier.padding(vertical = 8.dp),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                        ) {
+                            Text(
+                                text = tab.label,
+                                color = if (isSelected) SiriCyan else SiriTextSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
                 }
             }
@@ -269,11 +285,22 @@ fun ProductivityScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
                                     Icon(Icons.Default.Timer, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(20.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Pomodoro Focus Session", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Text(
+                                        "Pomodoro Focus Session",
+                                        color = SiriTextPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Surface(
                                     color = if (isFocusRunning) SiriCyan.copy(alpha = 0.2f) else Color(0xFF1E293B),
                                     shape = RoundedCornerShape(12.dp)
@@ -282,6 +309,7 @@ fun ProductivityScreen(
                                         text = if (isFocusRunning) "Active Session" else "Paused",
                                         color = if (isFocusRunning) SiriCyan else SiriTextSecondary,
                                         fontSize = 11.sp,
+                                        maxLines = 1,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
                                 }
@@ -300,27 +328,33 @@ fun ProductivityScreen(
                             Spacer(modifier = Modifier.height(10.dp))
 
                             // Focus Duration Presets
-                            Row(
+                            FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.padding(bottom = 8.dp)
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(bottom = 10.dp)
                             ) {
                                 for (duration in listOf(15, 25, 45, 60)) {
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
                                         color = Color(0xFF192436),
                                         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF28364D)),
-                                        modifier = Modifier.clickable {
-                                            viewModel.resetFocusTimer(duration)
-                                        }
+                                        modifier = Modifier
+                                            .defaultMinSize(minHeight = 36.dp)
+                                            .clickable {
+                                                viewModel.resetFocusTimer(duration)
+                                            }
                                     ) {
-                                        Text("${duration}m", color = SiriTextPrimary, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+                                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                                            Text("${duration}m", color = SiriTextPrimary, fontSize = 12.sp)
+                                        }
                                     }
                                 }
                             }
 
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Button(
                                     onClick = { viewModel.toggleFocusTimer() },
@@ -328,7 +362,9 @@ fun ProductivityScreen(
                                         containerColor = if (isFocusRunning) SiriMagenta else SiriCyan
                                     ),
                                     shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier.testTag("toggle_focus_timer_button")
+                                    modifier = Modifier
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .testTag("toggle_focus_timer_button")
                                 ) {
                                     Icon(
                                         imageVector = if (isFocusRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -337,18 +373,20 @@ fun ProductivityScreen(
                                         modifier = Modifier.size(20.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text(if (isFocusRunning) "Pause" else "Start Focus", color = Color.Black, fontWeight = FontWeight.Bold)
+                                    Text(if (isFocusRunning) "Pause" else "Start Focus", color = Color.Black, fontWeight = FontWeight.Bold, maxLines = 1)
                                 }
 
                                 Button(
                                     onClick = { viewModel.resetFocusTimer(25) },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D283A)),
                                     shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier.testTag("reset_focus_timer_button")
+                                    modifier = Modifier
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .testTag("reset_focus_timer_button")
                                 ) {
                                     Icon(Icons.Default.Refresh, contentDescription = null, tint = SiriTextSecondary, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Reset", color = SiriTextPrimary)
+                                    Text("Reset", color = SiriTextPrimary, maxLines = 1)
                                 }
                             }
                         }
@@ -369,17 +407,21 @@ fun ProductivityScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
                                     Icon(Icons.Default.Bedtime, contentDescription = null, tint = SiriViolet, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Media Sleep Timer", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("Media Sleep Timer", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 if (sleepRemaining > 0) {
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text("${sleepRemaining / 60}m ${sleepRemaining % 60}s left", color = SiriViolet, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -391,21 +433,30 @@ fun ProductivityScreen(
                                         shape = RoundedCornerShape(10.dp),
                                         color = Color(0xFF162235),
                                         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2E3E58)),
-                                        modifier = Modifier.weight(1f).clickable {
-                                            viewModel.startSleepTimer(t)
-                                            Toast.makeText(context, "Sleep timer set for $t minutes", Toast.LENGTH_SHORT).show()
-                                        }
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .defaultMinSize(minHeight = 40.dp)
+                                            .clickable {
+                                                viewModel.startSleepTimer(t)
+                                                Toast.makeText(context, "Sleep timer set for $t minutes", Toast.LENGTH_SHORT).show()
+                                            }
                                     ) {
-                                        Text("${t}m", color = SiriTextPrimary, fontSize = 11.sp, modifier = Modifier.padding(vertical = 6.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 8.dp)) {
+                                            Text("${t}m", color = SiriTextPrimary, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                        }
                                     }
                                 }
                                 if (sleepRemaining > 0) {
                                     Surface(
                                         shape = RoundedCornerShape(10.dp),
                                         color = Color(0xFF381A22),
-                                        modifier = Modifier.clickable { viewModel.cancelSleepTimer() }
+                                        modifier = Modifier
+                                            .defaultMinSize(minHeight = 40.dp)
+                                            .clickable { viewModel.cancelSleepTimer() }
                                     ) {
-                                        Text("Off", color = Color(0xFFFF8A80), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+                                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                            Text("Off", color = Color(0xFFFF8A80), fontSize = 12.sp)
+                                        }
                                     }
                                 }
                             }
@@ -450,17 +501,23 @@ fun ProductivityScreen(
                             text = "Tasks & Prioritization",
                             color = SiriTextPrimary,
                             fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             for (p in listOf("All", "High", "Normal")) {
                                 val isPSelected = taskPriorityFilter == p
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = if (isPSelected) SiriCyan.copy(alpha = 0.2f) else Color(0xFF162030),
-                                    modifier = Modifier.clickable { taskPriorityFilter = p }
+                                    modifier = Modifier
+                                        .defaultMinSize(minHeight = 32.dp)
+                                        .clickable { taskPriorityFilter = p }
                                 ) {
-                                    Text(p, color = if (isPSelected) SiriCyan else SiriTextSecondary, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)) {
+                                        Text(p, color = if (isPSelected) SiriCyan else SiriTextSecondary, fontSize = 11.sp)
+                                    }
                                 }
                             }
                         }
@@ -499,7 +556,10 @@ fun ProductivityScreen(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = SiriCyan),
                             shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.testTag("add_task_button")
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                            modifier = Modifier
+                                .defaultMinSize(minHeight = 52.dp)
+                                .testTag("add_task_button")
                         ) {
                             Icon(Icons.Default.Add, contentDescription = "Add", tint = Color.Black)
                         }
@@ -571,14 +631,21 @@ fun ProductivityScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Voice & Written Notes", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text(
+                            "Voice & Written Notes",
+                            color = SiriTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
                                 onClick = {
                                     val exported = viewModel.repository.exportNotes()
                                     viewModel.deviceController.shareContent(exported, "Export Notes")
                                 },
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(Icons.Default.Share, contentDescription = "Export Notes", tint = SiriCyan, modifier = Modifier.size(18.dp))
                             }
@@ -586,9 +653,11 @@ fun ProductivityScreen(
                             Button(
                                 onClick = { showAddNoteDialog = !showAddNoteDialog },
                                 colors = ButtonDefaults.buttonColors(containerColor = SiriCyan),
-                                shape = RoundedCornerShape(10.dp)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.defaultMinSize(minHeight = 40.dp)
                             ) {
-                                Text("+ Note", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text("+ Note", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
                             }
                         }
                     }
@@ -730,13 +799,22 @@ fun ProductivityScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Active Recall Flashcards", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text(
+                            "Active Recall Flashcards",
+                            color = SiriTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = { showAddCardDialog = !showAddCardDialog },
                             colors = ButtonDefaults.buttonColors(containerColor = SiriViolet),
-                            shape = RoundedCornerShape(10.dp)
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.defaultMinSize(minHeight = 40.dp)
                         ) {
-                            Text("+ Card", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("+ Card", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
                         }
                     }
 
@@ -885,14 +963,18 @@ fun ProductivityScreen(
                             text = "Modes & Automations",
                             color = SiriTextPrimary,
                             fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = { showAddShortcutDialog = !showAddShortcutDialog },
                             colors = ButtonDefaults.buttonColors(containerColor = SiriCyan),
-                            shape = RoundedCornerShape(10.dp)
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.defaultMinSize(minHeight = 40.dp)
                         ) {
-                            Text("+ Shortcut", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            Text("+ Shortcut", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
                         }
                     }
 
@@ -1020,14 +1102,18 @@ fun ProductivityScreen(
                                                 fontWeight = FontWeight.Medium
                                             )
                                         }
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Button(
                                                 onClick = { viewModel.handleUserUtterance(routine.triggerPhrase) },
                                                 colors = ButtonDefaults.buttonColors(containerColor = SiriViolet.copy(alpha = 0.2f)),
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                                 shape = RoundedCornerShape(10.dp),
-                                                modifier = Modifier.testTag("run_routine_${routine.id}")
+                                                modifier = Modifier
+                                                    .defaultMinSize(minHeight = 40.dp)
+                                                    .testTag("run_routine_${routine.id}")
                                             ) {
-                                                Text("Run", color = SiriViolet, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                                Text("Run", color = SiriViolet, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                                             }
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Switch(
@@ -1072,7 +1158,7 @@ fun ProductivityScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        for (rowDevices in smartDevices.chunked(2)) {
+                        for (rowDevices in smartDevices.chunked(smartHomeColumns)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1084,7 +1170,7 @@ fun ProductivityScreen(
                                         onToggle = { viewModel.repository.toggleSmartDevice(dev.id) }
                                     )
                                 }
-                                if (rowDevices.size == 1) {
+                                repeat(smartHomeColumns - rowDevices.size) {
                                     Spacer(modifier = Modifier.weight(1f))
                                 }
                             }

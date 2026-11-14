@@ -10,15 +10,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -82,6 +85,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.LanguageOption
@@ -163,7 +168,7 @@ fun AiStudioScreen(
 
     val scrollState = rememberScrollState()
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(
@@ -176,11 +181,14 @@ fun AiStudioScreen(
                 )
             )
     ) {
+        val horizontalPadding = if (maxWidth < 380.dp) 14.dp else 20.dp
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .verticalScroll(scrollState)
-                .padding(20.dp)
+                .padding(horizontal = horizontalPadding, vertical = 16.dp)
         ) {
             // Header
             Row(
@@ -202,7 +210,7 @@ fun AiStudioScreen(
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "AI Brain & Voice Studio",
                         color = SiriTextPrimary,
@@ -420,6 +428,7 @@ fun AiStudioScreen(
                     Card(
                         modifier = Modifier
                             .weight(1f)
+                            .defaultMinSize(minHeight = 68.dp)
                             .clickable { viewModel.setVoiceGender(gender) }
                             .testTag("voice_gender_${gender.name.lowercase()}"),
                         shape = RoundedCornerShape(14.dp),
@@ -434,24 +443,30 @@ fun AiStudioScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(12.dp),
+                                .padding(horizontal = 6.dp, vertical = 10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
                                 text = when (gender) {
-                                    VoiceGender.FEMALE -> "👩 Female (Siri)"
+                                    VoiceGender.FEMALE -> "👩 Female"
                                     VoiceGender.MALE -> "👨 Male"
                                     VoiceGender.SYSTEM_DEFAULT -> "⚙️ System"
                                 },
                                 color = if (isSelected) SiriMagenta else SiriTextPrimary,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = if (gender == VoiceGender.FEMALE) "Recommended" else if (gender == VoiceGender.MALE) "Deep Pitch" else "Default Engine",
+                                text = if (gender == VoiceGender.FEMALE) "Siri Voice" else if (gender == VoiceGender.MALE) "Deep Pitch" else "Default",
                                 color = SiriTextSecondary,
-                                fontSize = 10.sp
+                                fontSize = 10.sp,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             if (isSelected) {
                                 Spacer(modifier = Modifier.height(6.dp))
@@ -584,11 +599,20 @@ fun AiStudioScreen(
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F293D)),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().testTag("preview_voice_sample_button")
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 48.dp)
+                    .testTag("preview_voice_sample_button")
             ) {
                 Icon(Icons.Default.RecordVoiceOver, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Preview $activeAssistantName Voice Sample", color = SiriTextPrimary, fontSize = 13.sp)
+                Text(
+                    "Preview $activeAssistantName Voice Sample",
+                    color = SiriTextPrimary,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -603,38 +627,54 @@ fun AiStudioScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                for (lang in LanguageOption.values()) {
-                    val isSelected = lang == language
-                    Card(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { viewModel.setLanguage(lang) }
-                            .testTag("lang_${lang.name.lowercase()}"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isSelected) Color(0xFF0F2633) else SiriDarkSurfaceVariant
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (isSelected) SiriCyan else Color(0xFF28364D)
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val columns = if (maxWidth < 460.dp) 2 else 4
+                val langRows = LanguageOption.values().toList().chunked(columns)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (rowLangs in langRows) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                text = lang.displayName,
-                                color = if (isSelected) SiriCyan else SiriTextPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp
-                            )
+                            for (lang in rowLangs) {
+                                val isSelected = lang == language
+                                Card(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .clickable { viewModel.setLanguage(lang) }
+                                        .testTag("lang_${lang.name.lowercase()}"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isSelected) Color(0xFF0F2633) else SiriDarkSurfaceVariant
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (isSelected) SiriCyan else Color(0xFF28364D)
+                                    )
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .defaultMinSize(minHeight = 48.dp)
+                                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = lang.displayName,
+                                            color = if (isSelected) SiriCyan else SiriTextPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                            repeat(columns - rowLangs.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
                         }
                     }
                 }
@@ -675,6 +715,7 @@ fun AiStudioScreen(
                                 border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) SiriViolet else Color(0xFF2A3A52)),
                                 modifier = Modifier
                                     .weight(1f)
+                                    .defaultMinSize(minHeight = 48.dp)
                                     .clickable {
                                         selectedProvider = p
                                         val defaultModel = if (p == "Google Gemini") "gemini-2.5-flash" else "gpt-4o-mini"
@@ -684,14 +725,20 @@ fun AiStudioScreen(
                                         )
                                     }
                             ) {
-                                Text(
-                                    text = p,
-                                    color = if (selected) Color.White else SiriTextSecondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                    modifier = Modifier.padding(10.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        text = p,
+                                        color = if (selected) Color.White else SiriTextSecondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
@@ -712,19 +759,26 @@ fun AiStudioScreen(
                                     border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) SiriViolet else Color(0xFF2A3A52)),
                                     modifier = Modifier
                                         .weight(1f)
+                                        .defaultMinSize(minHeight = 48.dp)
                                         .clickable {
                                             selectedModel = m
                                             viewModel.repository.updateAiConfig(aiConfig.copy(model = m))
                                         }
                                 ) {
-                                    Text(
-                                        text = m,
-                                        color = if (selected) Color.White else SiriTextSecondary,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                        modifier = Modifier.padding(10.dp),
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
+                                    ) {
+                                        Text(
+                                            text = m,
+                                            color = if (selected) Color.White else SiriTextSecondary,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -787,7 +841,14 @@ fun AiStudioScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("User / Customer API Key (एपीआई कुंजी)", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text(
+                            text = "User / Customer API Key (एपीआई कुंजी)",
+                            color = SiriTextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Surface(
                             color = if (customApiKeyInput.isNotBlank()) Color(0xFF00E676).copy(alpha = 0.2f) else SiriCyan.copy(alpha = 0.2f),
                             shape = RoundedCornerShape(6.dp)
@@ -797,6 +858,7 @@ fun AiStudioScreen(
                                 color = if (customApiKeyInput.isNotBlank()) Color(0xFF00E676) else SiriCyan,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
+                                maxLines = 1,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -858,7 +920,10 @@ fun AiStudioScreen(
                         onClick = { viewModel.testApiConnection() },
                         colors = ButtonDefaults.buttonColors(containerColor = SiriViolet),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("test_api_connection_button"),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("test_api_connection_button"),
                         enabled = !isTestingApi
                     ) {
                         if (isTestingApi) {
@@ -972,9 +1037,11 @@ fun AiStudioScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
                                 Text("Background Voice Service", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                Spacer(modifier = Modifier.width(8.dp))
                                 Surface(
                                     color = if (isForegroundServiceActive) Color(0xFF00E676).copy(alpha = 0.2f) else Color.Gray.copy(alpha = 0.2f),
                                     shape = RoundedCornerShape(6.dp)
@@ -988,8 +1055,10 @@ fun AiStudioScreen(
                                     )
                                 }
                             }
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text("Ongoing notification with '🎙️ Ask Siri' button stays active", color = SiriTextSecondary, fontSize = 12.sp)
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
                         Switch(
                             checked = isForegroundServiceActive,
                             onCheckedChange = { enable ->
@@ -1020,7 +1089,8 @@ fun AiStudioScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Voice Session Timeout", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text("Voice Session Timeout", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(if (userPrefs.voiceSessionTimeoutSeconds == 0) "Never" else "${userPrefs.voiceSessionTimeoutSeconds}s", color = SiriCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                         Text("Stops continuous listening after silence to save battery", color = SiriTextSecondary, fontSize = 11.sp)
@@ -1033,11 +1103,22 @@ fun AiStudioScreen(
                                     shape = RoundedCornerShape(8.dp),
                                     color = if (isSelected) SiriCyan.copy(alpha = 0.25f) else Color(0xFF141E2C),
                                     border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) SiriCyan else Color(0xFF28364D)),
-                                    modifier = Modifier.weight(1f).clickable {
-                                        viewModel.repository.updateUserPreferences(userPrefs.copy(voiceSessionTimeoutSeconds = t))
-                                    }
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minHeight = 40.dp)
+                                        .clickable {
+                                            viewModel.repository.updateUserPreferences(userPrefs.copy(voiceSessionTimeoutSeconds = t))
+                                        }
                                 ) {
-                                    Text(label, color = if (isSelected) SiriCyan else SiriTextSecondary, fontSize = 11.sp, modifier = Modifier.padding(vertical = 6.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 8.dp)) {
+                                        Text(
+                                            label,
+                                            color = if (isSelected) SiriCyan else SiriTextSecondary,
+                                            fontSize = 12.sp,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 1
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1053,6 +1134,7 @@ fun AiStudioScreen(
                             Text("Continuous Conversation", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             Text("Re-arms microphone automatically after $activeAssistantName speaks", color = SiriTextSecondary, fontSize = 12.sp)
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
                         Switch(
                             checked = continuousListening,
                             onCheckedChange = { viewModel.repository.setContinuousListening(it) },
@@ -1070,6 +1152,7 @@ fun AiStudioScreen(
                             Text("Wake Word Activation", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             Text("Recognize 'Hey $activeAssistantName' / '$activeAssistantName' / 'Suno $activeAssistantName' prefix", color = SiriTextSecondary, fontSize = 12.sp)
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
                         Switch(
                             checked = wakeWordEnabled,
                             onCheckedChange = { viewModel.repository.setWakeWordEnabled(it) },
@@ -1087,6 +1170,7 @@ fun AiStudioScreen(
                             Text("Reduced Motion Mode", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                             Text("Minimizes particle effects and heavy visual animations", color = SiriTextSecondary, fontSize = 12.sp)
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
                         Switch(
                             checked = userPrefs.reducedMotion,
                             onCheckedChange = { viewModel.repository.updateUserPreferences(userPrefs.copy(reducedMotion = it)) },
@@ -1123,15 +1207,16 @@ fun AiStudioScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("Siri AI Assistant", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             Text("Installed Version: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})", color = SiriTextSecondary, fontSize = 12.sp)
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
                         Surface(
                             color = SiriGreen.copy(alpha = 0.2f),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Up to Date", color = SiriGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                            Text("Up to Date", color = SiriGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
                         }
                     }
 
@@ -1141,11 +1226,14 @@ fun AiStudioScreen(
                         onClick = { viewModel.checkForUpdates() },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1C2738)),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("check_updates_button")
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("check_updates_button")
                     ) {
                         Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Verify Latest Release & Manifest", color = SiriTextPrimary, fontSize = 13.sp)
+                        Text("Verify Latest Release & Manifest", color = SiriTextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

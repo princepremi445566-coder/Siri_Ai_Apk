@@ -295,15 +295,27 @@ class SiriViewModel(application: Application) : AndroidViewModel(application), F
         _voiceState.value = VoiceState.LISTENING
         listenLaunchJob = viewModelScope.launch {
             // Allow background wake-word AudioRecord to release mic hardware cleanly
-            delay(120L)
+            delay(180L)
             if (_voiceState.value == VoiceState.LISTENING) {
                 speechRecognizer?.startListening()
             }
         }
     }
 
+    fun onAppBackgrounded() {
+        if (_voiceState.value == VoiceState.LISTENING) {
+            Log.d("SiriVM", "App moved to background during active listening -> releasing mic to background service")
+            sessionTimeoutJob?.cancel()
+            listenLaunchJob?.cancel()
+            speechRecognizer?.cancel()
+            _voiceState.value = VoiceState.IDLE
+            SiriServiceBridge.notifyConversationFinished()
+        }
+    }
+
     fun stopListening() {
         sessionTimeoutJob?.cancel()
+        listenLaunchJob?.cancel()
         speechRecognizer?.stopListening()
         _voiceState.value = VoiceState.IDLE
         SiriServiceBridge.notifyConversationFinished()
@@ -774,6 +786,7 @@ class SiriViewModel(application: Application) : AndroidViewModel(application), F
         SiriServiceBridge.notifyConversationFinished()
         textToSpeech?.shutdown()
         speechRecognizer?.destroy()
+        listenLaunchJob?.cancel()
         focusTimerJob?.cancel()
         sleepTimerJob?.cancel()
         sessionTimeoutJob?.cancel()

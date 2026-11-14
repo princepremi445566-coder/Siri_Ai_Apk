@@ -84,6 +84,12 @@
             <action android:name="android.intent.action.SEARCH" />
         </intent>
         <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.DIAL" />
         </intent>
         <intent>
@@ -160,6 +166,7 @@
         <service
             android:name=".service.SiriVoiceService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="microphone" />
 
         <!-- Notification listener for reading/summarizing permitted notifications -->

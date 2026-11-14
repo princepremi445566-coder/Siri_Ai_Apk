@@ -40,12 +40,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 class SiriVoiceService : Service(), BackgroundServiceController {
 
     companion object {
+        private const val TAG = "SiriVoiceService"
         const val CHANNEL_ID = "siri_voice_service_channel"
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "ACTION_START_SIRI_SERVICE"
@@ -63,7 +66,13 @@ class SiriVoiceService : Service(), BackgroundServiceController {
         fun start(context: Context) {
             val appCtx = context.applicationContext
             if (ContextCompat.checkSelfPermission(appCtx, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                Log.w("SiriVoiceService", "Cannot start microphone foreground service without RECORD_AUDIO permission")
+                Log.w(TAG, "Cannot start microphone foreground service without RECORD_AUDIO permission")
+                SiriServiceBridge.setWakeEngineStatus(WakeEngineStatus.PERMISSION_MISSING)
+                return
+            }
+            // Prevent duplicate startForegroundService calls when service is already healthy & active
+            if (isServiceRunning && SiriServiceBridge.wakeEngineStatus.value != WakeEngineStatus.STOPPED) {
+                Log.d(TAG, "SiriVoiceService.start() skipped: already running (${SiriServiceBridge.wakeEngineStatus.value})")
                 return
             }
             val intent = Intent(appCtx, SiriVoiceService::class.java).apply {
@@ -77,9 +86,10 @@ class SiriVoiceService : Service(), BackgroundServiceController {
                 }
             } catch (e: Exception) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException) {
-                    Log.w("SiriVoiceService", "Android 12+ prevented starting foreground service from background: ${e.message}")
+                    Log.w(TAG, "Android 12+ prevented starting foreground service from background: ${e.message}")
+                    SiriServiceBridge.recordDiagnostic("Foreground service blocked from background start")
                 } else {
-                    Log.e("SiriVoiceService", "Failed to start SiriVoiceService: ${e.message}")
+                    Log.e(TAG, "Failed to start SiriVoiceService: ${e.message}")
                 }
             }
         }
@@ -96,7 +106,7 @@ class SiriVoiceService : Service(), BackgroundServiceController {
             try {
                 appCtx.startService(intent)
             } catch (e: Exception) {
-                Log.w("SiriVoiceService", "Error stopping service: ${e.message}")
+                Log.w(TAG, "Error stopping service: ${e.message}")
                 isServiceRunning = false
                 SiriServiceBridge.setServiceRunning(false)
             }
@@ -118,12 +128,21 @@ class SiriVoiceService : Service(), BackgroundServiceController {
     private var backgroundTts: SiriTextToSpeech? = null
 
     private var sessionWatchdogJob: Job? = null
+    private var commandLaunchJob: Job? = null
+    private var resumeWakeJob: Job? = null
     private var aiJob: Job? = null
     private var configObserverJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    @Volatile
+    private var hasRetriedBareWakeWord = false
+
+    @Volatile
+    private var recognizedCommandInSession = false
+
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "onCreate()")
         createNotificationChannel()
         initComponents()
         SiriServiceBridge.attachServiceController(this)
@@ -201,7 +220,6 @@ class SiriVoiceService : Service(), BackgroundServiceController {
 
         backgroundTts = SiriTextToSpeech(appCtx) { isSpeaking ->
             if (!isSpeaking && isBackgroundConversationActive.get()) {
-                // Finished speaking background reply -> return to wake-word listening automatically
                 finishBackgroundConversationAndResumeWakeWord()
             }
         }.apply {
@@ -219,6 +237,7 @@ class SiriVoiceService : Service(), BackgroundServiceController {
             },
             onPartialResult = { partial ->
                 if (intentParser.isStopCommand(partial)) {
+                    recognizedCommandInSession = true
                     backgroundSpeechRecognizer?.cancel()
                     backgroundTts?.stop()
                     finishBackgroundConversationAndResumeWakeWord()
@@ -227,21 +246,26 @@ class SiriVoiceService : Service(), BackgroundServiceController {
             onRmsDbChanged = { },
             onErrorOccurred = { errorMsg ->
                 if (isBackgroundConversationActive.get()) {
-                    Log.d("SiriVoiceService", "Background SpeechRecognizer finished/error: $errorMsg")
+                    Log.w(TAG, "Background SpeechRecognizer error: $errorMsg")
+                    SiriServiceBridge.recordDiagnostic(errorMsg)
+                    if (!recognizedCommandInSession) {
+                        wakeWordEngine?.recordFalseWakeTrigger()
+                    }
                     finishBackgroundConversationAndResumeWakeWord()
                 }
             },
             onListeningStateChanged = { listening ->
-                if (!listening && isBackgroundConversationActive.get() && aiJob?.isActive != true) {
-                    // Wait briefly for onResults or timeout before releasing back to wake-word mode
-                }
+                Log.d(TAG, "Background SpeechRecognizer listening=$listening")
             },
             onSpeechDetected = {
                 backgroundTts?.stop()
             },
             onNoMatchOrTimeout = {
                 if (isBackgroundConversationActive.get()) {
-                    Log.d("SiriVoiceService", "No speech/timeout in background session; returning to wake-word")
+                    Log.d(TAG, "No speech/timeout in background session; returning to wake-word")
+                    if (!recognizedCommandInSession) {
+                        wakeWordEngine?.recordFalseWakeTrigger()
+                    }
                     finishBackgroundConversationAndResumeWakeWord()
                 }
             }
@@ -271,12 +295,12 @@ class SiriVoiceService : Service(), BackgroundServiceController {
         configObserverJob?.cancel()
         configObserverJob = serviceScope.launch {
             launch {
-                repository.wakeWordOption.collectLatest { option ->
+                repository.wakeWordOption.drop(1).distinctUntilChanged().collectLatest { option ->
                     wakeWordEngine?.setWakeWordOption(option)
                 }
             }
             launch {
-                repository.userPreferences.collectLatest { prefs ->
+                repository.userPreferences.drop(1).distinctUntilChanged().collectLatest { prefs ->
                     val name = prefs.assistantName.trim().ifBlank { "Siri" }
                     wakeWordEngine?.setCustomAssistantName(name)
                     if (isForegroundStarted.get() && !isBackgroundConversationActive.get()) {
@@ -285,9 +309,9 @@ class SiriVoiceService : Service(), BackgroundServiceController {
                 }
             }
             launch {
-                repository.wakeWordEnabled.collectLatest { enabled ->
+                repository.wakeWordEnabled.drop(1).distinctUntilChanged().collectLatest { enabled ->
                     if (!isServiceRunning) return@collectLatest
-                    if (enabled && !isBackgroundConversationActive.get() && !SiriServiceBridge.isConversationActive.value) {
+                    if (enabled && !isBackgroundConversationActive.get() && !SiriServiceBridge.isConversationActivelyLocked()) {
                         wakeWordEngine?.start()
                     } else if (!enabled) {
                         wakeWordEngine?.stop()
@@ -295,28 +319,28 @@ class SiriVoiceService : Service(), BackgroundServiceController {
                 }
             }
             launch {
-                repository.selectedLanguage.collectLatest { lang ->
+                repository.selectedLanguage.drop(1).distinctUntilChanged().collectLatest { lang ->
                     backgroundTts?.setLanguage(lang)
                     backgroundSpeechRecognizer?.setLanguage(lang)
                 }
             }
             launch {
-                repository.voiceGender.collectLatest { gender ->
+                repository.voiceGender.drop(1).distinctUntilChanged().collectLatest { gender ->
                     backgroundTts?.setVoiceGender(gender)
                 }
             }
             launch {
-                repository.voicePersonality.collectLatest { p ->
+                repository.voicePersonality.drop(1).distinctUntilChanged().collectLatest { p ->
                     backgroundTts?.setPersonality(p)
                 }
             }
             launch {
-                repository.customSpeedMultiplier.collectLatest { speed ->
+                repository.customSpeedMultiplier.drop(1).distinctUntilChanged().collectLatest { speed ->
                     backgroundTts?.setSpeedMultiplier(speed)
                 }
             }
             launch {
-                repository.customPitchMultiplier.collectLatest { pitch ->
+                repository.customPitchMultiplier.drop(1).distinctUntilChanged().collectLatest { pitch ->
                     backgroundTts?.setPitchMultiplier(pitch)
                 }
             }
@@ -324,14 +348,22 @@ class SiriVoiceService : Service(), BackgroundServiceController {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        val action = intent?.action
+        Log.d(TAG, "onStartCommand action=$action startId=$startId isForegroundStarted=${isForegroundStarted.get()} isServiceRunning=$isServiceRunning")
+
+        when (action) {
             ACTION_STOP -> {
                 repository.setBackgroundServiceEnabled(false)
                 shutdownServiceGracefully()
                 return START_NOT_STICKY
             }
             ACTION_TRIGGER_BACKGROUND_LISTEN -> {
-                ensureForegroundStarted("Listening for your command...")
+                if (!ensureForegroundStarted("Listening for your command...")) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                isServiceRunning = true
+                SiriServiceBridge.setServiceRunning(true)
                 mainHandler.post {
                     startBackgroundVoiceCommandSession(playChime = false)
                 }
@@ -339,7 +371,24 @@ class SiriVoiceService : Service(), BackgroundServiceController {
             }
         }
 
-        // Prevent duplicate startForeground / duplicate engine threads
+        // If service is recreated by system (intent == null) and user had disabled it, stop cleanly
+        if (intent == null && !repository.backgroundServiceEnabled.value) {
+            Log.i(TAG, "Service recreated with backgroundServiceEnabled=false -> stopping")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // Idempotent handling: avoid interrupting an already-running foreground service & AudioRecord loop
+        if (isForegroundStarted.get() && isServiceRunning) {
+            if (repository.wakeWordEnabled.value &&
+                !isBackgroundConversationActive.get() &&
+                !SiriServiceBridge.isConversationActivelyLocked()
+            ) {
+                wakeWordEngine?.start()
+            }
+            return START_STICKY
+        }
+
         val assistantName = repository.effectiveAssistantName()
         if (!ensureForegroundStarted("$assistantName AI is running in background")) {
             stopSelf()
@@ -351,12 +400,17 @@ class SiriVoiceService : Service(), BackgroundServiceController {
 
         if (repository.wakeWordEnabled.value &&
             !isBackgroundConversationActive.get() &&
-            !SiriServiceBridge.isConversationActive.value
+            !SiriServiceBridge.isConversationActivelyLocked()
         ) {
             wakeWordEngine?.start()
         }
 
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.i(TAG, "onTaskRemoved() - keeping foreground voice service alive (enabled=${repository.backgroundServiceEnabled.value})")
     }
 
     private fun ensureForegroundStarted(statusText: String): Boolean {
@@ -366,7 +420,7 @@ class SiriVoiceService : Service(), BackgroundServiceController {
         ) == PackageManager.PERMISSION_GRANTED
 
         if (!hasMicPermission) {
-            Log.e("SiriVoiceService", "RECORD_AUDIO permission missing; cannot run microphone foreground service.")
+            Log.e(TAG, "RECORD_AUDIO permission missing; cannot run microphone foreground service.")
             SiriServiceBridge.setWakeEngineStatus(WakeEngineStatus.PERMISSION_MISSING)
             return false
         }
@@ -390,7 +444,8 @@ class SiriVoiceService : Service(), BackgroundServiceController {
             }
             true
         } catch (e: Exception) {
-            Log.e("SiriVoiceService", "startForeground failed: ${e.message}")
+            Log.e(TAG, "startForeground failed: ${e.message}")
+            SiriServiceBridge.recordDiagnostic("Could not start foreground mic service: ${e.message}")
             false
         }
     }
@@ -457,13 +512,16 @@ class SiriVoiceService : Service(), BackgroundServiceController {
 
     private fun onWakeWordDetected() {
         if (!isServiceRunning) return
-        if (isBackgroundConversationActive.get() || SiriServiceBridge.isConversationActive.value) return
+        if (isBackgroundConversationActive.get() || SiriServiceBridge.isConversationActivelyLocked()) {
+            Log.d(TAG, "Ignoring wake trigger while conversation is active")
+            return
+        }
 
-        // Always yield microphone first before starting SpeechRecognizer
+        // Always yield AudioRecord microphone first before opening SpeechRecognizer
         wakeWordEngine?.pauseForCommand()
         playAssistantChime()
 
-        // If app UI is open in foreground, trigger foreground ViewModel so orb & chat update live
+        // If app UI is visible in foreground, trigger foreground ViewModel so orb & chat update live
         if (SiriServiceBridge.dispatchWakeWordToForeground()) {
             val assistantName = repository.effectiveAssistantName()
             updateNotificationText("Listening via $assistantName...")
@@ -475,7 +533,15 @@ class SiriVoiceService : Service(), BackgroundServiceController {
     }
 
     private fun startBackgroundVoiceCommandSession(playChime: Boolean) {
-        if (!isBackgroundConversationActive.compareAndSet(false, true)) return
+        if (!isBackgroundConversationActive.compareAndSet(false, true)) {
+            Log.d(TAG, "Background voice session already active; ignoring duplicate start")
+            return
+        }
+
+        resumeWakeJob?.cancel()
+        commandLaunchJob?.cancel()
+        hasRetriedBareWakeWord = false
+        recognizedCommandInSession = false
 
         wakeWordEngine?.pauseForCommand()
         if (playChime) {
@@ -486,7 +552,8 @@ class SiriVoiceService : Service(), BackgroundServiceController {
         updateNotificationText("Listening for your command...")
 
         if (!SpeechRecognizer.isRecognitionAvailable(applicationContext)) {
-            Log.w("SiriVoiceService", "SpeechRecognizer unavailable on this device for background commands")
+            Log.w(TAG, "SpeechRecognizer unavailable on this device for background commands")
+            SiriServiceBridge.recordDiagnostic("Speech recognizer unavailable on device")
             finishBackgroundConversationAndResumeWakeWord()
             return
         }
@@ -496,7 +563,7 @@ class SiriVoiceService : Service(), BackgroundServiceController {
         sessionWatchdogJob = serviceScope.launch {
             delay(SESSION_WAKE_TIMEOUT_MS)
             if (isBackgroundConversationActive.get()) {
-                Log.d("SiriVoiceService", "Background session watchdog timeout -> returning to wake-word listening")
+                Log.w(TAG, "Background session watchdog timeout -> returning to wake-word listening")
                 backgroundSpeechRecognizer?.cancel()
                 backgroundTts?.stop()
                 finishBackgroundConversationAndResumeWakeWord()
@@ -504,9 +571,9 @@ class SiriVoiceService : Service(), BackgroundServiceController {
         }
 
         backgroundSpeechRecognizer?.setLanguage(repository.selectedLanguage.value)
-        serviceScope.launch {
+        commandLaunchJob = serviceScope.launch {
             // Allow AudioRecord hardware release before opening SpeechRecognizer
-            delay(120L)
+            delay(180L)
             if (isBackgroundConversationActive.get()) {
                 backgroundSpeechRecognizer?.startListening()
             }
@@ -516,9 +583,32 @@ class SiriVoiceService : Service(), BackgroundServiceController {
     private fun handleBackgroundSpokenCommand(rawText: String) {
         val cleanText = intentParser.cleanWakePhrase(rawText).trim()
         if (cleanText.isEmpty()) {
+            // If user said only "Hey Siri" in background, give them one immediate follow-up listen window
+            if (!hasRetriedBareWakeWord && isBackgroundConversationActive.get()) {
+                hasRetriedBareWakeWord = true
+                recognizedCommandInSession = true
+                wakeWordEngine?.recordValidCommandRecognized()
+                Log.d(TAG, "Bare wake-word detected in background; re-arming recognizer once for command")
+                playAssistantChime()
+                updateNotificationText("Listening for your command...")
+                commandLaunchJob?.cancel()
+                commandLaunchJob = serviceScope.launch {
+                    delay(200L)
+                    if (isBackgroundConversationActive.get()) {
+                        backgroundSpeechRecognizer?.startListening()
+                    }
+                }
+                return
+            }
+            if (!recognizedCommandInSession) {
+                wakeWordEngine?.recordFalseWakeTrigger()
+            }
             finishBackgroundConversationAndResumeWakeWord()
             return
         }
+
+        recognizedCommandInSession = true
+        wakeWordEngine?.recordValidCommandRecognized()
 
         if (intentParser.isStopCommand(cleanText)) {
             backgroundTts?.stop()
@@ -578,7 +668,7 @@ class SiriVoiceService : Service(), BackgroundServiceController {
                 updateNotificationText("$activeAssistantName is speaking...")
                 backgroundTts?.speak(aiResult.text)
             } catch (e: Exception) {
-                Log.e("SiriVoiceService", "Background AI generation error", e)
+                Log.e(TAG, "Background AI generation error", e)
                 finishBackgroundConversationAndResumeWakeWord()
             }
         }
@@ -586,6 +676,7 @@ class SiriVoiceService : Service(), BackgroundServiceController {
 
     private fun finishBackgroundConversationAndResumeWakeWord() {
         sessionWatchdogJob?.cancel()
+        commandLaunchJob?.cancel()
         isBackgroundConversationActive.set(false)
         releaseWakeLockSafely()
 
@@ -593,23 +684,30 @@ class SiriVoiceService : Service(), BackgroundServiceController {
             val assistantName = repository.effectiveAssistantName()
             updateNotificationText("$assistantName AI is running in background")
             if (repository.wakeWordEnabled.value) {
-                serviceScope.launch {
-                    // Brief cooldown after audio/TTS focus release before reopening AudioRecord
-                    delay(650L)
-                    if (isServiceRunning &&
-                        !isBackgroundConversationActive.get() &&
-                        !SiriServiceBridge.isConversationActive.value &&
-                        repository.wakeWordEnabled.value
-                    ) {
-                        wakeWordEngine?.resume()
-                    }
-                }
+                scheduleWakeWordResume()
+            }
+        }
+    }
+
+    private fun scheduleWakeWordResume() {
+        resumeWakeJob?.cancel()
+        resumeWakeJob = serviceScope.launch {
+            // Cooldown after SpeechRecognizer/TTS audio focus release before reopening AudioRecord
+            delay(650L)
+            if (isServiceRunning &&
+                !isBackgroundConversationActive.get() &&
+                !SiriServiceBridge.isConversationActivelyLocked() &&
+                repository.wakeWordEnabled.value
+            ) {
+                Log.d(TAG, "Resuming offline wake-word listening after conversation")
+                wakeWordEngine?.resume()
             }
         }
     }
 
     // BackgroundServiceController callbacks from foreground SiriViewModel
     override fun pauseWakeWordForForegroundCommand() {
+        resumeWakeJob?.cancel()
         wakeWordEngine?.pauseForCommand()
         updateNotificationText("${repository.effectiveAssistantName()} active...")
     }
@@ -618,16 +716,7 @@ class SiriVoiceService : Service(), BackgroundServiceController {
         if (!isServiceRunning) return
         updateNotificationText("${repository.effectiveAssistantName()} AI is running in background")
         if (repository.wakeWordEnabled.value) {
-            serviceScope.launch {
-                delay(650L)
-                if (isServiceRunning &&
-                    !SiriServiceBridge.isConversationActive.value &&
-                    !isBackgroundConversationActive.get() &&
-                    repository.wakeWordEnabled.value
-                ) {
-                    wakeWordEngine?.resume()
-                }
-            }
+            scheduleWakeWordResume()
         }
     }
 
@@ -660,7 +749,7 @@ class SiriVoiceService : Service(), BackgroundServiceController {
                 wakeLock?.acquire(SESSION_WAKE_TIMEOUT_MS + 2000L)
             }
         } catch (e: Exception) {
-            Log.w("SiriVoiceService", "WakeLock acquire skipped: ${e.message}")
+            Log.w(TAG, "WakeLock acquire skipped: ${e.message}")
         }
     }
 
@@ -674,11 +763,14 @@ class SiriVoiceService : Service(), BackgroundServiceController {
     }
 
     private fun shutdownServiceGracefully() {
+        Log.i(TAG, "shutdownServiceGracefully()")
         isServiceRunning = false
         isForegroundStarted.set(false)
         isBackgroundConversationActive.set(false)
         SiriServiceBridge.setServiceRunning(false)
         sessionWatchdogJob?.cancel()
+        commandLaunchJob?.cancel()
+        resumeWakeJob?.cancel()
         aiJob?.cancel()
         wakeWordEngine?.stop()
         backgroundSpeechRecognizer?.cancel()
@@ -690,9 +782,11 @@ class SiriVoiceService : Service(), BackgroundServiceController {
 
     override fun onDestroy() {
         super.onDestroy()
+        Log.i(TAG, "onDestroy()")
         SiriServiceBridge.detachServiceController(this)
         isServiceRunning = false
         isForegroundStarted.set(false)
+        isBackgroundConversationActive.set(false)
         SiriServiceBridge.setServiceRunning(false)
         wakeWordEngine?.destroy()
         backgroundSpeechRecognizer?.destroy()

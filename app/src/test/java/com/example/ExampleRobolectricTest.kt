@@ -831,4 +831,79 @@ class ExampleRobolectricTest {
         )
         assertTrue(offlineFollowUp.contains("Prince"))
     }
+
+    @Test
+    fun testBackgroundMicStabilityAppSwitchAndBridgeRecovery() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val shadowApp = org.robolectric.Shadows.shadowOf(app)
+        shadowApp.grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+
+        val vm = com.example.viewmodel.SiriViewModel(app)
+        com.example.service.SiriServiceBridge.setAppInForeground(true)
+
+        val controller = org.robolectric.Robolectric.buildService(
+            com.example.service.SiriVoiceService::class.java,
+            android.content.Intent(app, com.example.service.SiriVoiceService::class.java).apply {
+                action = com.example.service.SiriVoiceService.ACTION_START
+            }
+        )
+        val service = controller.create().startCommand(0, 1).get()
+        assertTrue(com.example.service.SiriVoiceService.isServiceRunning)
+
+        // Calling SiriVoiceService.start() while already running & active should be idempotent (no duplicate startForegroundService)
+        com.example.service.SiriServiceBridge.setWakeEngineStatus(com.example.voice.WakeEngineStatus.LISTENING)
+        com.example.service.SiriVoiceService.start(app)
+        assertEquals(null, shadowApp.nextStartedService)
+
+        // Simulate user tapping mic, then switching to WhatsApp/Instagram/YouTube/Chrome before speaking
+        vm.startListening()
+        assertTrue(com.example.service.SiriServiceBridge.isConversationActive.value)
+        com.example.service.SiriServiceBridge.setAppInForeground(false)
+        vm.onAppBackgrounded()
+        assertFalse(com.example.service.SiriServiceBridge.isConversationActive.value)
+
+        // Swiping task / backgrounding should preserve running foreground service when enabled
+        service.onTaskRemoved(android.content.Intent(app, com.example.MainActivity::class.java))
+        assertTrue(com.example.service.SiriVoiceService.isServiceRunning)
+
+        // Stop cleanly
+        service.onStartCommand(
+            android.content.Intent(app, com.example.service.SiriVoiceService::class.java).apply {
+                action = com.example.service.SiriVoiceService.ACTION_STOP
+            },
+            0,
+            2
+        )
+        assertFalse(com.example.service.SiriVoiceService.isServiceRunning)
+        controller.destroy()
+        vm.stopAllSpeech()
+    }
+
+    @Test
+    fun testContinuousMediaAudioRejectedByWakeWordContour() {
+        val sampleRate = com.example.voice.HeySiriAcousticAnalyzer.SAMPLE_RATE
+        val frameSize = com.example.voice.HeySiriAcousticAnalyzer.FRAME_SAMPLES
+
+        val loudSpeech = ShortArray(frameSize) { i ->
+            (4800.0 * kotlin.math.sin(2.0 * kotlin.math.PI * 600.0 * i / sampleRate)).toInt().toShort()
+        }
+        val sibilant = ShortArray(frameSize) { i ->
+            (3000.0 * kotlin.math.sin(2.0 * kotlin.math.PI * 5500.0 * i / sampleRate)).toInt().toShort()
+        }
+
+        // Simulate 108 frames (~2.16s) of continuous loud YouTube/Instagram dialogue without natural phrase end
+        val continuousMediaFrames = buildList {
+            repeat(50) { add(com.example.voice.HeySiriAcousticAnalyzer.extractFrameFeatures(loudSpeech)) }
+            repeat(8) { add(com.example.voice.HeySiriAcousticAnalyzer.extractFrameFeatures(sibilant)) }
+            repeat(50) { add(com.example.voice.HeySiriAcousticAnalyzer.extractFrameFeatures(loudSpeech)) }
+        }
+        assertFalse(
+            com.example.voice.HeySiriAcousticAnalyzer.matchesWakeWordContour(
+                frames = continuousMediaFrames,
+                noiseFloorRms = 220.0,
+                wakeWordOption = com.example.model.WakeWordOption.HEY_SIRI,
+                assistantName = "Siri"
+            )
+        )
+    }
 }

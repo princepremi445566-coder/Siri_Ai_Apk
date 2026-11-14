@@ -99,6 +99,9 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         com.example.service.SiriServiceBridge.setAppInForeground(false)
+        if (!isChangingConfigurations) {
+            viewModel.onAppBackgrounded()
+        }
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
@@ -160,6 +163,7 @@ fun MainContent(viewModel: SiriViewModel) {
                     Manifest.permission.RECORD_AUDIO
                 ) == PackageManager.PERMISSION_GRANTED
                 if (hasAudio &&
+                    !com.example.service.SiriVoiceService.isServiceRunning &&
                     viewModel.repository.backgroundServiceEnabled.value &&
                     viewModel.repository.wakeWordEnabled.value
                 ) {

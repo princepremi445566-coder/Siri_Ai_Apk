@@ -7,8 +7,11 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioRecordingConfiguration
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
 import android.speech.SpeechRecognizer
@@ -24,7 +27,11 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sqrt
@@ -139,8 +146,9 @@ object HeySiriAcousticAnalyzer {
      * the acoustic signature of "Hey <AssistantName>" / "Suno <AssistantName>" / "<AssistantName>":
      * - Duration: 340ms - 2200ms (17 to 110 frames)
      * - Multi-syllable structure (at least 2 distinct voiced/syllable energy peaks or strong 2-part contour)
+     * - Rejects saturated continuous media / flat hum bursts that hit the max window without ending naturally
      * - Sibilant fricative check when the configured assistant name contains sibilants (e.g. "Siri", "Jarvis"),
-     *   or relaxed voiced-cadence contour when the custom name is non-sibilant (e.g. "Aria", "Nova", "Buddy").
+     *   or voiced-cadence contour when the custom name is non-sibilant (e.g. "Aria", "Nova", "Buddy").
      */
     fun matchesWakeWordContour(
         frames: List<FrameFeatures>,
@@ -150,7 +158,7 @@ object HeySiriAcousticAnalyzer {
     ): Boolean {
         if (frames.size < 17 || frames.size > 110) return false
 
-        val speechThreshold = (noiseFloorRms * 2.3).coerceAtLeast(320.0)
+        val speechThreshold = (noiseFloorRms * 2.35).coerceAtLeast(340.0)
         var activeSpeechFrames = 0
         var voicedFrames = 0
         var sibilantFrames = 0
@@ -179,6 +187,9 @@ object HeySiriAcousticAnalyzer {
             }
         }
 
+        // Continuous speaker music / video dialogue hits the 110-frame cutoff without quiet pauses
+        if (frames.size >= 105 && activeSpeechFrames > 92) return false
+
         val minActiveFrames = when (wakeWordOption) {
             WakeWordOption.SIRI -> 10
             WakeWordOption.HEY_SIRI, WakeWordOption.SUNO_SIRI -> 14
@@ -198,19 +209,35 @@ object HeySiriAcousticAnalyzer {
 
 /**
  * Lightweight, battery-optimized offline wake-word detector using AudioRecord + DSP contour matching.
- * Never records to disk and never streams audio to any remote server.
+ * Features:
+ * - Single serialized capture coroutine guarded by Mutex (no overlapping AudioRecord sessions)
+ * - Idempotent start()/resume() (never tears down a healthy AudioRecord when already listening)
+ * - AudioRecordingCallback monitoring for Android 10+ silencing / mic preemption by apps like WhatsApp or Camera
+ * - False-trigger adaptive cooldown to prevent speaker media (YouTube/Instagram) ping-pong
  */
 class OfflineWakeWordEngine(
     private val context: Context,
     private val onWakeWordDetected: (WakeWordOption) -> Unit,
     private val onStatusChanged: (WakeEngineStatus) -> Unit
 ) {
+    companion object {
+        private const val TAG = "WakeEngine"
+        private const val BASE_COOLDOWN_MS = 2_500L
+        private const val MAX_COOLDOWN_MS = 10_000L
+    }
+
+    private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val engineMutex = Mutex()
     private var captureJob: Job? = null
 
     private val isEnabled = AtomicBoolean(false)
     private val isPaused = AtomicBoolean(false)
-    private val lastTriggerTimestamp = java.util.concurrent.atomic.AtomicLong(0L)
+    private val isSilencedBySystem = AtomicBoolean(false)
+    private val lastTriggerTimestamp = AtomicLong(0L)
+    private val consecutiveFalseTriggers = AtomicInteger(0)
+    private val activeAudioSessionId = AtomicInteger(AudioManager.AUDIO_SESSION_ID_GENERATE)
 
     @Volatile
     private var currentWakeOption: WakeWordOption = WakeWordOption.HEY_SIRI
@@ -221,14 +248,15 @@ class OfflineWakeWordEngine(
     @Volatile
     private var currentStatus: WakeEngineStatus = WakeEngineStatus.STOPPED
 
-    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    private val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+    private var recordingCallback: AudioManager.AudioRecordingCallback? = null
 
     fun getStatus(): WakeEngineStatus = currentStatus
 
     fun isOnDeviceRecognizerSupported(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)
     }
 
     fun setWakeWordOption(option: WakeWordOption) {
@@ -239,68 +267,190 @@ class OfflineWakeWordEngine(
         customAssistantName = name.trim().ifBlank { "Siri" }
     }
 
-    @Synchronized
-    fun start() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            updateStatus(WakeEngineStatus.PERMISSION_MISSING)
-            return
-        }
-        isPaused.set(false)
-        if (isEnabled.compareAndSet(false, true) || captureJob?.isActive != true) {
-            isEnabled.set(true)
-            launchCaptureLoop()
-        } else {
-            updateStatus(WakeEngineStatus.LISTENING)
+    fun recordFalseWakeTrigger() {
+        val count = consecutiveFalseTriggers.incrementAndGet().coerceAtMost(4)
+        Log.d(TAG, "Recorded false wake trigger #$count; extending cooldown to ${effectiveCooldownMs()}ms")
+    }
+
+    fun recordValidCommandRecognized() {
+        if (consecutiveFalseTriggers.getAndSet(0) > 0) {
+            Log.d(TAG, "Valid command recognized; reset wake cooldown to ${BASE_COOLDOWN_MS}ms")
         }
     }
 
-    @Synchronized
+    private fun effectiveCooldownMs(): Long {
+        val falseCount = consecutiveFalseTriggers.get()
+        return when {
+            falseCount <= 0 -> BASE_COOLDOWN_MS
+            falseCount == 1 -> 5_000L
+            falseCount == 2 -> 7_500L
+            else -> MAX_COOLDOWN_MS
+        }
+    }
+
+    fun start() {
+        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "start() skipped: RECORD_AUDIO permission missing")
+            updateStatus(WakeEngineStatus.PERMISSION_MISSING)
+            return
+        }
+        val wasEnabled = isEnabled.getAndSet(true)
+        val wasPaused = isPaused.getAndSet(false)
+        if (wasEnabled && !wasPaused && captureJob?.isActive == true) {
+            Log.d(TAG, "start() no-op: wake engine already active (status=$currentStatus)")
+            return
+        }
+        Log.d(TAG, "start() launching wake-word capture loop (wasEnabled=$wasEnabled, wasPaused=$wasPaused)")
+        ensureCaptureLoopRunning()
+    }
+
     fun pauseForCommand() {
+        Log.d(TAG, "pauseForCommand()")
         isPaused.set(true)
         updateStatus(WakeEngineStatus.PAUSED_COMMAND)
-        stopCaptureLoopBlocking()
+        cancelCaptureLoopLockedAsync()
     }
 
-    @Synchronized
     fun pauseForSpeaking() {
+        Log.d(TAG, "pauseForSpeaking()")
         isPaused.set(true)
         updateStatus(WakeEngineStatus.PAUSED_SPEAKING)
-        stopCaptureLoopBlocking()
+        cancelCaptureLoopLockedAsync()
     }
 
-    @Synchronized
     fun resume() {
-        if (!isEnabled.get()) return
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (!isEnabled.get()) {
+            Log.d(TAG, "resume() ignored: engine disabled")
+            return
+        }
+        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             updateStatus(WakeEngineStatus.PERMISSION_MISSING)
             return
         }
-        isPaused.set(false)
-        if (captureJob?.isActive != true) {
-            launchCaptureLoop()
-        } else {
-            updateStatus(WakeEngineStatus.LISTENING)
+        val wasPaused = isPaused.getAndSet(false)
+        if (!wasPaused && captureJob?.isActive == true) {
+            Log.d(TAG, "resume() no-op: capture loop already active")
+            return
         }
+        Log.d(TAG, "resume() restarting wake-word capture loop")
+        ensureCaptureLoopRunning()
     }
 
-    @Synchronized
     fun stop() {
+        Log.d(TAG, "stop()")
         isEnabled.set(false)
         isPaused.set(false)
-        stopCaptureLoopBlocking()
+        isSilencedBySystem.set(false)
+        cancelCaptureLoopLockedAsync()
+        unregisterAudioRecordingCallback()
         updateStatus(WakeEngineStatus.STOPPED)
     }
 
-    @Synchronized
     fun destroy() {
+        Log.d(TAG, "destroy()")
         stop()
         scope.cancel()
     }
 
-    private fun stopCaptureLoopBlocking() {
-        val job = captureJob
-        captureJob = null
-        job?.cancel()
+    private fun cancelCaptureLoopLockedAsync() {
+        scope.launch {
+            engineMutex.withLock {
+                val job = captureJob
+                captureJob = null
+                if (job != null && job.isActive) {
+                    job.cancelAndJoin()
+                }
+            }
+        }
+    }
+
+    private fun ensureCaptureLoopRunning() {
+        scope.launch {
+            engineMutex.withLock {
+                if (!isEnabled.get() || isPaused.get()) return@withLock
+                if (captureJob?.isActive == true) return@withLock
+
+                registerAudioRecordingCallback()
+                captureJob = scope.launch {
+                    runSerializedCaptureLoop()
+                }
+            }
+        }
+    }
+
+    private fun registerAudioRecordingCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        if (recordingCallback != null) return
+        val am = audioManager ?: return
+
+        val callback = object : AudioManager.AudioRecordingCallback() {
+            override fun onRecordingConfigChanged(configs: List<AudioRecordingConfiguration>) {
+                val mySessionId = activeAudioSessionId.get()
+                var silenced = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val myConfig = configs.firstOrNull { it.clientAudioSessionId == mySessionId }
+                    if (myConfig != null && myConfig.isClientSilenced) {
+                        silenced = true
+                    }
+                    // Also treat another active foreground non-assistant capture session as busy
+                    val otherActive = configs.any {
+                        it.clientAudioSessionId != mySessionId && !it.isClientSilenced
+                    }
+                    if (otherActive && !isPaused.get()) {
+                        silenced = true
+                    }
+                } else {
+                    val otherActive = configs.any { it.clientAudioSessionId != mySessionId }
+                    if (otherActive && !isPaused.get()) {
+                        silenced = true
+                    }
+                }
+                val prev = isSilencedBySystem.getAndSet(silenced)
+                if (prev != silenced) {
+                    Log.d(TAG, "AudioRecordingCallback: systemSilenced=$silenced (configs=${configs.size}, mySession=$mySessionId)")
+                }
+            }
+        }
+        recordingCallback = callback
+        try {
+            am.registerAudioRecordingCallback(callback, mainHandler)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register AudioRecordingCallback: ${e.message}")
+            recordingCallback = null
+        }
+    }
+
+    private fun unregisterAudioRecordingCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val cb = recordingCallback ?: return
+        recordingCallback = null
+        try {
+            audioManager?.unregisterAudioRecordingCallback(cb)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun hasActiveCall(): Boolean {
+        val audioMode = audioManager?.mode ?: AudioManager.MODE_NORMAL
+        return audioMode == AudioManager.MODE_IN_CALL ||
+            audioMode == AudioManager.MODE_RINGTONE ||
+            audioMode == AudioManager.MODE_IN_COMMUNICATION
+    }
+
+    private fun hasExternalActiveMicCapture(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+        val am = audioManager ?: return false
+        return try {
+            val mySession = activeAudioSessionId.get()
+            val configs = am.activeRecordingConfigurations
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                configs.any { it.clientAudioSessionId != mySession && !it.isClientSilenced }
+            } else {
+                configs.any { it.clientAudioSessionId != mySession }
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun updateStatus(status: WakeEngineStatus) {
@@ -311,165 +461,206 @@ class OfflineWakeWordEngine(
     }
 
     @SuppressLint("MissingPermission")
-    private fun launchCaptureLoop() {
-        val oldJob = captureJob
-        captureJob = scope.launch {
-            oldJob?.cancelAndJoin()
+    private suspend fun runSerializedCaptureLoop() {
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+        } catch (_: Exception) {
+        }
+
+        val minBuf = AudioRecord.getMinBufferSize(
+            HeySiriAcousticAnalyzer.SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        if (minBuf <= 0) {
+            Log.e(TAG, "AudioRecord.getMinBufferSize returned invalid size: $minBuf")
+            updateStatus(WakeEngineStatus.UNSUPPORTED_HARDWARE)
+            return
+        }
+
+        val bufferSize = maxOf(minBuf * 2, HeySiriAcousticAnalyzer.FRAME_SAMPLES * 16)
+        val frameBuffer = ShortArray(HeySiriAcousticAnalyzer.FRAME_SAMPLES)
+        var backoffMs = 1_000L
+
+        while (scope.isActive && isEnabled.get() && !isPaused.get()) {
+            // Respect active calls or VoIP sessions cleanly without opening AudioRecord
+            if (hasActiveCall()) {
+                updateStatus(WakeEngineStatus.PAUSED_CALL)
+                delay(1_500L)
+                continue
+            }
+
+            // Do not fight another active microphone app (WhatsApp voice, Camera, etc.)
+            if (isSilencedBySystem.get() || hasExternalActiveMicCapture()) {
+                updateStatus(WakeEngineStatus.MIC_BUSY)
+                delay(1_500L)
+                // Re-check live configurations in case callback didn't fire for release
+                isSilencedBySystem.set(hasExternalActiveMicCapture())
+                continue
+            }
+
+            var recorder: AudioRecord? = null
             try {
-                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
-            } catch (_: Exception) {
-            }
+                val activeRecorder = createAudioRecord(bufferSize)
+                if (activeRecorder == null || activeRecorder.state != AudioRecord.STATE_INITIALIZED) {
+                    Log.w(TAG, "AudioRecord initialization failed (state=${activeRecorder?.state}); backing off ${backoffMs}ms")
+                    activeRecorder?.release()
+                    updateStatus(WakeEngineStatus.MIC_BUSY)
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(6_000L)
+                    continue
+                }
+                recorder = activeRecorder
+                activeAudioSessionId.set(activeRecorder.audioSessionId)
 
-            val minBuf = AudioRecord.getMinBufferSize(
-                HeySiriAcousticAnalyzer.SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-            )
-            if (minBuf <= 0) {
-                updateStatus(WakeEngineStatus.UNSUPPORTED_HARDWARE)
-                return@launch
-            }
-
-            val bufferSize = maxOf(minBuf * 2, HeySiriAcousticAnalyzer.FRAME_SAMPLES * 16)
-            val frameBuffer = ShortArray(HeySiriAcousticAnalyzer.FRAME_SAMPLES)
-            var backoffMs = 500L
-
-            while (isActive && isEnabled.get() && !isPaused.get()) {
-                // Respect active phone calls / VoIP calls
-                val audioMode = audioManager?.mode ?: AudioManager.MODE_NORMAL
-                if (audioMode == AudioManager.MODE_IN_CALL ||
-                    audioMode == AudioManager.MODE_RINGTONE ||
-                    audioMode == AudioManager.MODE_IN_COMMUNICATION
-                ) {
-                    updateStatus(WakeEngineStatus.PAUSED_CALL)
-                    delay(1000L)
+                activeRecorder.startRecording()
+                if (activeRecorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    Log.w(TAG, "AudioRecord failed to enter RECORDSTATE_RECORDING; backing off ${backoffMs}ms")
+                    activeAudioSessionId.set(AudioManager.AUDIO_SESSION_ID_GENERATE)
+                    activeRecorder.release()
+                    recorder = null
+                    updateStatus(WakeEngineStatus.MIC_BUSY)
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(6_000L)
                     continue
                 }
 
-                var recorder: AudioRecord? = null
-                try {
-                    val activeRecorder = createAudioRecord(bufferSize)
-                    if (activeRecorder == null || activeRecorder.state != AudioRecord.STATE_INITIALIZED) {
-                        activeRecorder?.release()
-                        updateStatus(WakeEngineStatus.MIC_BUSY)
-                        delay(backoffMs)
-                        backoffMs = (backoffMs * 2).coerceAtMost(5000L)
-                        continue
-                    }
-                    recorder = activeRecorder
+                Log.i(TAG, "AudioRecord started stably (sessionId=${activeRecorder.audioSessionId}, source=${activeRecorder.audioSource})")
+                backoffMs = 1_000L
+                updateStatus(WakeEngineStatus.LISTENING)
 
-                    activeRecorder.startRecording()
-                    if (activeRecorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                        activeRecorder.release()
-                        recorder = null
-                        updateStatus(WakeEngineStatus.MIC_BUSY)
-                        delay(backoffMs)
-                        backoffMs = (backoffMs * 2).coerceAtMost(5000L)
-                        continue
+                var noiseFloor = 240.0
+                var speechActive = false
+                var silenceFrames = 0
+                var consecutiveZeroReads = 0
+                var consecutiveSilencedFrames = 0
+                val candidateFrames = ArrayList<HeySiriAcousticAnalyzer.FrameFeatures>(115)
+
+                while (scope.isActive && isEnabled.get() && !isPaused.get()) {
+                    if (hasActiveCall()) {
+                        Log.d(TAG, "Yielding AudioRecord for active phone/VoIP call")
+                        updateStatus(WakeEngineStatus.PAUSED_CALL)
+                        break
                     }
 
-                    backoffMs = 500L
-                    updateStatus(WakeEngineStatus.LISTENING)
+                    if (isSilencedBySystem.get()) {
+                        Log.d(TAG, "Yielding AudioRecord: silenced by higher-priority foreground mic user")
+                        updateStatus(WakeEngineStatus.MIC_BUSY)
+                        break
+                    }
 
-                    var noiseFloor = 220.0
-                    var speechActive = false
-                    var silenceFrames = 0
-                    val candidateFrames = ArrayList<HeySiriAcousticAnalyzer.FrameFeatures>(115)
-
-                    while (isActive && isEnabled.get() && !isPaused.get()) {
-                        // Yield if a phone call starts mid-session
-                        val modeNow = audioManager?.mode ?: AudioManager.MODE_NORMAL
-                        if (modeNow == AudioManager.MODE_IN_CALL || modeNow == AudioManager.MODE_IN_COMMUNICATION) {
-                            updateStatus(WakeEngineStatus.PAUSED_CALL)
-                            break
-                        }
-
-                        val readCount = activeRecorder.read(frameBuffer, 0, frameBuffer.size)
-                        if (readCount < 0) {
-                            Log.w("OfflineWakeWord", "AudioRecord read error $readCount; backing off")
+                    val readCount = activeRecorder.read(frameBuffer, 0, frameBuffer.size)
+                    if (readCount < 0) {
+                        Log.w(TAG, "AudioRecord.read error $readCount; releasing and backing off")
+                        updateStatus(WakeEngineStatus.MIC_BUSY)
+                        break
+                    }
+                    if (readCount == 0) {
+                        consecutiveZeroReads++
+                        if (consecutiveZeroReads >= 25) {
+                            Log.w(TAG, "AudioRecord returned 25 consecutive 0-sample reads; resetting cleanly")
                             updateStatus(WakeEngineStatus.MIC_BUSY)
                             break
                         }
-                        if (readCount == 0) {
-                            delay(20L)
-                            continue
+                        delay(20L)
+                        continue
+                    }
+                    consecutiveZeroReads = 0
+
+                    val features = HeySiriAcousticAnalyzer.extractFrameFeatures(frameBuffer, readCount)
+
+                    // Ignore muted/zeroed frames (common on Android 10+ right when another app preempts mic)
+                    if (features.rms < 1.0) {
+                        consecutiveSilencedFrames++
+                        if (consecutiveSilencedFrames >= 30 && hasExternalActiveMicCapture()) {
+                            Log.d(TAG, "Detected zeroed audio frames with external mic client active -> yielding mic")
+                            isSilencedBySystem.set(true)
+                            updateStatus(WakeEngineStatus.MIC_BUSY)
+                            break
                         }
+                        continue
+                    }
+                    consecutiveSilencedFrames = 0
 
-                        val features = HeySiriAcousticAnalyzer.extractFrameFeatures(frameBuffer, readCount)
-                        val onsetThreshold = (noiseFloor * 2.7).coerceAtLeast(360.0)
+                    val onsetThreshold = (noiseFloor * 2.85).coerceAtLeast(400.0)
 
-                        if (!speechActive) {
-                            // Slow adaptive noise floor tracking during quiet periods
-                            if (features.rms < onsetThreshold * 0.9) {
-                                noiseFloor = (noiseFloor * 0.985 + features.rms * 0.015).coerceIn(80.0, 1200.0)
-                            } else if (features.rms >= onsetThreshold && features.voicedEnergy > 0.0) {
-                                speechActive = true
-                                silenceFrames = 0
-                                candidateFrames.clear()
-                                candidateFrames.add(features)
-                            }
-
-                            // Slight battery saver duty yield when Android Power Saver is enabled
-                            if (!speechActive && powerManager?.isPowerSaveMode == true) {
-                                delay(10L)
-                            }
-                        } else {
+                    if (!speechActive) {
+                        // Track ambient noise floor without letting loud background media starve real commands
+                        if (features.rms < onsetThreshold * 0.9) {
+                            noiseFloor = (noiseFloor * 0.985 + features.rms * 0.015).coerceIn(110.0, 700.0)
+                        } else if (features.rms >= onsetThreshold && features.voicedEnergy > 0.0) {
+                            speechActive = true
+                            silenceFrames = 0
+                            candidateFrames.clear()
                             candidateFrames.add(features)
-                            if (features.rms < noiseFloor * 1.8) {
-                                silenceFrames++
-                            } else {
-                                silenceFrames = 0
-                            }
+                        }
 
-                            // End of speech burst (~260ms silence hangover) or max wake-word window (~2.2s)
-                            if (silenceFrames >= 13 || candidateFrames.size >= 110) {
-                                val matched = HeySiriAcousticAnalyzer.matchesWakeWordContour(
-                                    frames = candidateFrames,
-                                    noiseFloorRms = noiseFloor,
-                                    wakeWordOption = currentWakeOption,
-                                    assistantName = customAssistantName
-                                )
-                                candidateFrames.clear()
-                                speechActive = false
-                                silenceFrames = 0
+                        if (!speechActive && powerManager?.isPowerSaveMode == true) {
+                            delay(10L)
+                        }
+                    } else {
+                        candidateFrames.add(features)
+                        if (features.rms < noiseFloor * 1.85) {
+                            silenceFrames++
+                        } else {
+                            silenceFrames = 0
+                        }
 
-                                val now = System.currentTimeMillis()
-                                if (matched && (now - lastTriggerTimestamp.get()) > 2500L) {
-                                    lastTriggerTimestamp.set(now)
-                                    Log.d("OfflineWakeWord", "Offline wake-word candidate detected (${currentWakeOption.label} / $customAssistantName)")
-                                    isPaused.set(true)
-                                    updateStatus(WakeEngineStatus.PAUSED_COMMAND)
-                                    try {
-                                        activeRecorder.stop()
-                                    } catch (_: Exception) {
-                                    }
-                                    activeRecorder.release()
-                                    recorder = null
-                                    onWakeWordDetected(currentWakeOption)
-                                    return@launch
+                        // End of speech burst (~260ms silence hangover) or max wake-word window (~2.2s)
+                        if (silenceFrames >= 13 || candidateFrames.size >= 110) {
+                            val matched = HeySiriAcousticAnalyzer.matchesWakeWordContour(
+                                frames = candidateFrames,
+                                noiseFloorRms = noiseFloor,
+                                wakeWordOption = currentWakeOption,
+                                assistantName = customAssistantName
+                            )
+                            candidateFrames.clear()
+                            speechActive = false
+                            silenceFrames = 0
+
+                            val now = System.currentTimeMillis()
+                            val cooldownMs = effectiveCooldownMs()
+                            if (matched && (now - lastTriggerTimestamp.get()) > cooldownMs) {
+                                lastTriggerTimestamp.set(now)
+                                Log.d(TAG, "Offline wake-word candidate detected (${currentWakeOption.label} / $customAssistantName)")
+                                isPaused.set(true)
+                                updateStatus(WakeEngineStatus.PAUSED_COMMAND)
+                                try {
+                                    activeRecorder.stop()
+                                } catch (_: Exception) {
                                 }
+                                activeRecorder.release()
+                                activeAudioSessionId.set(AudioManager.AUDIO_SESSION_ID_GENERATE)
+                                recorder = null
+                                onWakeWordDetected(currentWakeOption)
+                                return
                             }
                         }
-                    }
-                } catch (e: SecurityException) {
-                    Log.e("OfflineWakeWord", "Microphone permission denied", e)
-                    updateStatus(WakeEngineStatus.PERMISSION_MISSING)
-                    return@launch
-                } catch (e: Exception) {
-                    Log.e("OfflineWakeWord", "Wake-word capture error: ${e.message}")
-                    updateStatus(WakeEngineStatus.MIC_BUSY)
-                    delay(backoffMs)
-                    backoffMs = (backoffMs * 2).coerceAtMost(5000L)
-                } finally {
-                    try {
-                        recorder?.stop()
-                    } catch (_: Exception) {
-                    }
-                    try {
-                        recorder?.release()
-                    } catch (_: Exception) {
                     }
                 }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Microphone permission denied during capture", e)
+                updateStatus(WakeEngineStatus.PERMISSION_MISSING)
+                return
+            } catch (e: Exception) {
+                Log.e(TAG, "Wake-word capture exception: ${e.message}")
+                updateStatus(WakeEngineStatus.MIC_BUSY)
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(6_000L)
+            } finally {
+                activeAudioSessionId.set(AudioManager.AUDIO_SESSION_ID_GENERATE)
+                try {
+                    recorder?.stop()
+                } catch (_: Exception) {
+                }
+                try {
+                    recorder?.release()
+                } catch (_: Exception) {
+                }
+            }
+
+            if (scope.isActive && isEnabled.get() && !isPaused.get()) {
+                delay(400L)
             }
         }
     }
@@ -498,7 +689,7 @@ class OfflineWakeWordEngine(
                 }
             }
         } catch (e: Exception) {
-            Log.e("OfflineWakeWord", "Failed to create AudioRecord", e)
+            Log.e(TAG, "Failed to create AudioRecord", e)
             null
         }
     }

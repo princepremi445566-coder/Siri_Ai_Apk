@@ -39,6 +39,37 @@ class SiriTextToSpeech(
     private var customPitchMultiplier: Float = 1.0f
 
     private var activeFinalUtteranceId: String? = null
+    private var speechSafetyRunnable: Runnable? = null
+
+    private fun cancelSpeechSafetyWatchdog() {
+        speechSafetyRunnable?.let { mainHandler.removeCallbacks(it) }
+        speechSafetyRunnable = null
+    }
+
+    private fun scheduleSpeechSafetyWatchdog(textLength: Int) {
+        cancelSpeechSafetyWatchdog()
+        val timeoutMs = ((textLength * 95L) + 4_500L).coerceIn(6_000L, 45_000L)
+        val expectedFinalId = activeFinalUtteranceId
+        val runnable = Runnable {
+            if (!isShutdown && expectedFinalId != null && activeFinalUtteranceId == expectedFinalId) {
+                val stillSpeaking = try {
+                    tts?.isSpeaking == true
+                } catch (_: Exception) {
+                    false
+                }
+                if (!stillSpeaking) {
+                    Log.w("SiriTTS", "Speech safety watchdog cleared stalled TTS state ($expectedFinalId)")
+                    activeFinalUtteranceId = null
+                    abandonAudioFocus()
+                    notifyState(false)
+                } else {
+                    scheduleSpeechSafetyWatchdog(60)
+                }
+            }
+        }
+        speechSafetyRunnable = runnable
+        mainHandler.postDelayed(runnable, timeoutMs)
+    }
 
     private fun notifyState(isSpeaking: Boolean) {
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
@@ -61,6 +92,8 @@ class SiriTextToSpeech(
 
                 override fun onDone(utteranceId: String?) {
                     if (utteranceId == activeFinalUtteranceId || activeFinalUtteranceId == null) {
+                        cancelSpeechSafetyWatchdog()
+                        activeFinalUtteranceId = null
                         abandonAudioFocus()
                         notifyState(false)
                     }
@@ -68,11 +101,15 @@ class SiriTextToSpeech(
 
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
+                    cancelSpeechSafetyWatchdog()
+                    activeFinalUtteranceId = null
                     abandonAudioFocus()
                     notifyState(false)
                 }
 
                 override fun onError(utteranceId: String?, errorCode: Int) {
+                    cancelSpeechSafetyWatchdog()
+                    activeFinalUtteranceId = null
                     abandonAudioFocus()
                     notifyState(false)
                 }
@@ -377,9 +414,12 @@ class SiriTextToSpeech(
             }
         }
         if (!queuedAny) {
+            cancelSpeechSafetyWatchdog()
             activeFinalUtteranceId = null
             abandonAudioFocus()
             notifyState(false)
+        } else {
+            scheduleSpeechSafetyWatchdog(clean.length)
         }
     }
 
@@ -411,6 +451,7 @@ class SiriTextToSpeech(
     }
 
     private fun stopInternal(notifyIdle: Boolean) {
+        cancelSpeechSafetyWatchdog()
         pendingUtterance = null
         activeFinalUtteranceId = null
         try {
@@ -430,6 +471,7 @@ class SiriTextToSpeech(
 
     fun shutdown() {
         isShutdown = true
+        cancelSpeechSafetyWatchdog()
         pendingUtterance = null
         activeFinalUtteranceId = null
         try {

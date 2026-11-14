@@ -60,6 +60,7 @@ fun SiriOrb(
     voiceState: VoiceState,
     audioLevel: Float,
     modifier: Modifier = Modifier,
+    reducedMotion: Boolean = false,
     onClick: () -> Unit = {}
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "siri_orb_3d_transition")
@@ -179,7 +180,11 @@ fun SiriOrb(
                 0f
             }
 
-            val currentRadius = baseRadius * (breathScale + audioExpansion) * (stateEnergy * 0.98f)
+            val effectiveScale = if (reducedMotion) 1.0f else (breathScale + audioExpansion)
+            val currentRadius = baseRadius * effectiveScale * (stateEnergy * 0.98f)
+            val effectiveCoreRotation = if (reducedMotion) 25f else coreRotation
+            val effectiveGyroAngle = if (reducedMotion) 45f else gyroAngle
+            val effectiveWavePhase = if (reducedMotion) 0f else wavePhase
 
             // Dynamic radiant Golden palette based on state
             val (cPrimary, cSecondary, cTertiary, cAccent) = when (voiceState) {
@@ -253,14 +258,16 @@ fun SiriOrb(
             // =================================================================
             // LAYER 2: Floating 3D Micro-Particles (Space/Holographic Depth)
             // =================================================================
-            drawFloatingParticles(
-                center = center,
-                baseRadius = currentRadius,
-                phase = particlePhase,
-                voiceState = voiceState,
-                colorA = cPrimary,
-                colorB = cTertiary
-            )
+            if (!reducedMotion) {
+                drawFloatingParticles(
+                    center = center,
+                    baseRadius = currentRadius,
+                    phase = particlePhase,
+                    voiceState = voiceState,
+                    colorA = cPrimary,
+                    colorB = cTertiary
+                )
+            }
 
             // =================================================================
             // LAYER 3: 3D Gyroscopic Orbital Rings (Tilted Perspective Rings)
@@ -268,9 +275,9 @@ fun SiriOrb(
             drawGyroscopicRings(
                 center = center,
                 radius = currentRadius,
-                coreAngle = coreRotation,
-                gyroAngle = gyroAngle,
-                wavePhase = wavePhase,
+                coreAngle = effectiveCoreRotation,
+                gyroAngle = effectiveGyroAngle,
+                wavePhase = effectiveWavePhase,
                 smoothAudio = smoothAudio,
                 voiceState = voiceState,
                 cPrimary = cPrimary,
@@ -284,8 +291,8 @@ fun SiriOrb(
             drawVolumetricCore(
                 center = center,
                 radius = currentRadius,
-                rotation = coreRotation,
-                wavePhase = wavePhase,
+                rotation = effectiveCoreRotation,
+                wavePhase = effectiveWavePhase,
                 voiceState = voiceState,
                 cPrimary = cPrimary,
                 cSecondary = cSecondary,

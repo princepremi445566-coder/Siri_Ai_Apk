@@ -33,6 +33,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +47,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.ui.screens.AiStudioScreen
 import com.example.ui.screens.PrivacyScreen
 import com.example.ui.screens.ProductivityScreen
@@ -86,18 +90,56 @@ class MainActivity : ComponentActivity() {
         checkIntentForBackgroundListen(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        com.example.service.SiriServiceBridge.setAppInForeground(true)
+        startBackgroundVoiceIfEnabled()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        com.example.service.SiriServiceBridge.setAppInForeground(false)
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         checkIntentForBackgroundListen(intent)
     }
 
+    private fun startBackgroundVoiceIfEnabled() {
+        val hasAudio = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hasAudio &&
+            viewModel.repository.backgroundServiceEnabled.value &&
+            viewModel.repository.wakeWordEnabled.value
+        ) {
+            com.example.service.SiriVoiceService.start(this)
+        }
+    }
+
     private fun checkIntentForBackgroundListen(intent: android.content.Intent?) {
         if (intent != null) {
             val shouldListen = intent.getBooleanExtra(com.example.service.SiriVoiceService.EXTRA_TRIGGER_LISTEN, false) ||
-                intent.action == com.example.service.SiriVoiceService.ACTION_TRIGGER_LISTEN
+                intent.action == com.example.service.SiriVoiceService.ACTION_TRIGGER_LISTEN ||
+                intent.action == Intent.ACTION_ASSIST ||
+                intent.action == Intent.ACTION_VOICE_COMMAND
             if (shouldListen) {
-                viewModel.startListening()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    setShowWhenLocked(true)
+                    setTurnScreenOn(true)
+                }
+                val hasAudio = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+                if (hasAudio) {
+                    viewModel.startListening()
+                } else {
+                    viewModel.emitUiEvent("Please grant Microphone permission to use voice commands.")
+                }
             }
         }
     }
@@ -106,10 +148,32 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainContent(viewModel: SiriViewModel) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var selectedTab by remember { mutableStateOf(SiriTab.ASSISTANT) }
     var showPermissionSettingsDialog by remember { mutableStateOf(false) }
 
-    // Request only ungranted runtime permissions
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val hasAudio = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+                if (hasAudio &&
+                    viewModel.repository.backgroundServiceEnabled.value &&
+                    viewModel.repository.wakeWordEnabled.value
+                ) {
+                    com.example.service.SiriVoiceService.start(context)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // Request only ungranted runtime permissions once on initial onboarding
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissionsResult ->
@@ -118,26 +182,30 @@ fun MainContent(viewModel: SiriViewModel) {
         )
         if (!audioGranted) {
             showPermissionSettingsDialog = true
+        } else if (viewModel.repository.backgroundServiceEnabled.value && viewModel.repository.wakeWordEnabled.value) {
+            com.example.service.SiriVoiceService.start(context)
         }
     }
 
     LaunchedEffect(Unit) {
-        val requiredPermissions = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requiredPermissions.add(Manifest.permission.RECORD_AUDIO)
-        }
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requiredPermissions.add(Manifest.permission.CAMERA)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (!viewModel.repository.hasInitialPermissionsRequested()) {
+            val requiredPermissions = mutableListOf<String>()
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requiredPermissions.add(Manifest.permission.RECORD_AUDIO)
             }
-        }
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                requiredPermissions.add(Manifest.permission.CAMERA)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
 
-        // Only launch if there are actually ungranted permissions
-        if (requiredPermissions.isNotEmpty()) {
-            permissionLauncher.launch(requiredPermissions.toTypedArray())
+            viewModel.repository.markInitialPermissionsRequested()
+            if (requiredPermissions.isNotEmpty()) {
+                permissionLauncher.launch(requiredPermissions.toTypedArray())
+            }
         }
     }
 

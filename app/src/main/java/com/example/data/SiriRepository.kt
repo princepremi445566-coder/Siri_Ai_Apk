@@ -2,6 +2,8 @@ package com.example.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.os.Build
 import com.example.model.ActionExecutionLog
 import com.example.model.AiConfig
 import com.example.model.AutomationRoutine
@@ -28,10 +30,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
-class SiriRepository(private val context: Context) {
+class SiriRepository(context: Context) {
 
-    private val prefs: SharedPreferences = context.getSharedPreferences("siri_ai_prefs", Context.MODE_PRIVATE)
+    private val appContext: Context = context.applicationContext
+    private val prefs: SharedPreferences = appContext.getSharedPreferences("siri_ai_prefs", Context.MODE_PRIVATE)
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
@@ -90,14 +94,51 @@ class SiriRepository(private val context: Context) {
     private val _wakeWordEnabled = MutableStateFlow(prefs.getBoolean("wake_word_enabled", true))
     val wakeWordEnabled: StateFlow<Boolean> = _wakeWordEnabled.asStateFlow()
 
+    private val _backgroundServiceEnabled = MutableStateFlow(prefs.getBoolean("background_service_enabled", true))
+    val backgroundServiceEnabled: StateFlow<Boolean> = _backgroundServiceEnabled.asStateFlow()
+
     private val _customSpeedMultiplier = MutableStateFlow(prefs.getFloat("speed_multiplier", 1.0f))
     val customSpeedMultiplier: StateFlow<Float> = _customSpeedMultiplier.asStateFlow()
 
     private val _customPitchMultiplier = MutableStateFlow(prefs.getFloat("pitch_multiplier", 1.0f))
     val customPitchMultiplier: StateFlow<Float> = _customPitchMultiplier.asStateFlow()
 
-    private val _updateInfo = MutableStateFlow(UpdateInfo())
+    private val _updateInfo = MutableStateFlow(loadUpdateInfoFromManifest())
     val updateInfo: StateFlow<UpdateInfo> = _updateInfo.asStateFlow()
+
+    companion object {
+        @Volatile
+        private var instance: SiriRepository? = null
+
+        fun getInstance(context: Context): SiriRepository {
+            return instance ?: synchronized(this) {
+                instance ?: SiriRepository(context.applicationContext).also { instance = it }
+            }
+        }
+    }
+
+    private fun loadUpdateInfoFromManifest(): UpdateInfo {
+        val defaultInfo = UpdateInfo()
+        return try {
+            val appInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appContext.packageManager.getApplicationInfo(
+                    appContext.packageName,
+                    PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                appContext.packageManager.getApplicationInfo(appContext.packageName, PackageManager.GET_META_DATA)
+            }
+            val manifestUrl = appInfo.metaData?.getString("com.example.UPDATE_APK_URL")
+            if (!manifestUrl.isNullOrBlank()) {
+                defaultInfo.copy(downloadUrl = manifestUrl.trim())
+            } else {
+                defaultInfo
+            }
+        } catch (e: Exception) {
+            defaultInfo
+        }
+    }
 
     init {
         loadSessions()
@@ -223,27 +264,50 @@ class SiriRepository(private val context: Context) {
         prefs.edit().putBoolean("wake_word_enabled", enabled).apply()
     }
 
+    fun setBackgroundServiceEnabled(enabled: Boolean) {
+        _backgroundServiceEnabled.value = enabled
+        prefs.edit().putBoolean("background_service_enabled", enabled).apply()
+    }
+
+    fun hasInitialPermissionsRequested(): Boolean = prefs.getBoolean("initial_permissions_requested", false)
+
+    fun markInitialPermissionsRequested() {
+        prefs.edit().putBoolean("initial_permissions_requested", true).apply()
+    }
+
     // --- User Preferences Memory ---
+    fun effectiveAssistantName(): String = _userPreferences.value.assistantName.trim().ifBlank { "Siri" }
+
+    fun effectiveUserAddress(): String = _userPreferences.value.userName.trim().ifBlank { "Friend" }
+
     fun updateUserPreferences(newPrefs: UserPreferences) {
-        _userPreferences.value = newPrefs
+        val sanitized = newPrefs.copy(
+            assistantName = newPrefs.assistantName.trim().ifBlank { "Siri" },
+            userName = newPrefs.userName.trim().ifBlank { "Friend" }
+        )
+        _userPreferences.value = sanitized
         prefs.edit()
-            .putString("pref_user_name", newPrefs.userName)
-            .putString("pref_home_loc", newPrefs.homeLocation)
-            .putString("pref_work_loc", newPrefs.workLocation)
-            .putString("pref_temp_unit", newPrefs.preferredTempUnit)
-            .putString("pref_briefing_time", newPrefs.morningBriefingTime)
-            .putBoolean("pref_quiet_hours", newPrefs.quietHoursEnabled)
-            .putString("pref_quiet_start", newPrefs.quietHoursStart)
-            .putString("pref_quiet_end", newPrefs.quietHoursEnd)
-            .putBoolean("pref_filter_sensitive", newPrefs.filterSensitiveNotifications)
-            .putBoolean("pref_reduced_motion", newPrefs.reducedMotion)
-            .putInt("pref_session_timeout", newPrefs.voiceSessionTimeoutSeconds)
+            .putString("pref_assistant_name", sanitized.assistantName)
+            .putString("pref_user_name", sanitized.userName)
+            .putString("pref_home_loc", sanitized.homeLocation)
+            .putString("pref_work_loc", sanitized.workLocation)
+            .putString("pref_temp_unit", sanitized.preferredTempUnit)
+            .putString("pref_briefing_time", sanitized.morningBriefingTime)
+            .putBoolean("pref_quiet_hours", sanitized.quietHoursEnabled)
+            .putString("pref_quiet_start", sanitized.quietHoursStart)
+            .putString("pref_quiet_end", sanitized.quietHoursEnd)
+            .putBoolean("pref_filter_sensitive", sanitized.filterSensitiveNotifications)
+            .putBoolean("pref_reduced_motion", sanitized.reducedMotion)
+            .putInt("pref_session_timeout", sanitized.voiceSessionTimeoutSeconds)
             .apply()
     }
 
     private fun loadUserPreferences(): UserPreferences {
+        val rawAssistantName = prefs.getString("pref_assistant_name", "Siri")?.trim()
+        val rawUserName = prefs.getString("pref_user_name", "Friend")?.trim()
         return UserPreferences(
-            userName = prefs.getString("pref_user_name", "Friend") ?: "Friend",
+            assistantName = rawAssistantName?.takeIf { it.isNotBlank() } ?: "Siri",
+            userName = rawUserName?.takeIf { it.isNotBlank() } ?: "Friend",
             homeLocation = prefs.getString("pref_home_loc", "Home") ?: "Home",
             workLocation = prefs.getString("pref_work_loc", "Office") ?: "Office",
             preferredTempUnit = prefs.getString("pref_temp_unit", "Celsius (°C)") ?: "Celsius (°C)",
@@ -268,6 +332,12 @@ class SiriRepository(private val context: Context) {
         )
         val updated = (listOf(log) + _actionLogs.value).take(40)
         _actionLogs.value = updated
+    }
+
+    fun markActionLogUndone(logId: String) {
+        _actionLogs.value = _actionLogs.value.map {
+            if (it.id == logId) it.copy(isReversible = false, undoPayload = null) else it
+        }
     }
 
     // --- Voice Shortcuts ---
@@ -451,7 +521,10 @@ class SiriRepository(private val context: Context) {
     }
 
     fun deleteSession(sessionId: String) {
-        val updatedSessions = _sessions.value.filterNot { it.id == sessionId }
+        var updatedSessions = _sessions.value.filterNot { it.id == sessionId }
+        if (updatedSessions.isEmpty()) {
+            updatedSessions = listOf(ConversationSession(id = "default", title = "General Assistant", category = "General"))
+        }
         _sessions.value = updatedSessions
         saveSessions(updatedSessions)
 
@@ -460,7 +533,7 @@ class SiriRepository(private val context: Context) {
         saveHistory(updatedMessages)
 
         if (_currentSessionId.value == sessionId) {
-            _currentSessionId.value = updatedSessions.firstOrNull()?.id ?: "default"
+            _currentSessionId.value = updatedSessions.first().id
         }
     }
 
@@ -530,7 +603,8 @@ class SiriRepository(private val context: Context) {
 
     // --- Messages History ---
     fun addMessage(message: ChatMessage) {
-        val updated = _messages.value + message.copy(sessionId = _currentSessionId.value)
+        val targetSessionId = message.sessionId.ifBlank { _currentSessionId.value }
+        val updated = _messages.value + message.copy(sessionId = targetSessionId)
         _messages.value = updated
         saveHistory(updated)
     }
@@ -547,9 +621,24 @@ class SiriRepository(private val context: Context) {
         _flashcards.value = emptyList()
         _actionLogs.value = emptyList()
         prefs.edit().clear().apply()
-        // Re-initialize baseline defaults
+        // Reset all in-memory preferences and baseline collections
+        _userPreferences.value = loadUserPreferences()
+        _aiConfig.value = loadAiConfig()
+        _voicePersonality.value = loadVoicePersonality()
+        _voiceGender.value = loadVoiceGender()
+        _selectedLanguage.value = loadLanguage()
+        _wakeWordOption.value = loadWakeWord()
+        _continuousListening.value = false
+        _wakeWordEnabled.value = true
+        _backgroundServiceEnabled.value = true
+        _customSpeedMultiplier.value = 1.0f
+        _customPitchMultiplier.value = 1.0f
         _sessions.value = listOf(ConversationSession(id = "default", title = "General Assistant", category = "General"))
         _currentSessionId.value = "default"
+        loadShortcuts()
+        loadAutomationRules()
+        loadSmartDevices()
+        loadRoutines()
     }
 
     private fun saveHistory(list: List<ChatMessage>) {
@@ -591,10 +680,17 @@ class SiriRepository(private val context: Context) {
     private fun loadHistory() {
         val json = prefs.getString("chat_history", null)
         if (json.isNullOrBlank()) {
+            val assistantName = effectiveAssistantName()
+            val userAddress = effectiveUserAddress()
+            val greetingText = if (userAddress.equals("Friend", ignoreCase = true)) {
+                "Hey there! I'm $assistantName, your personal voice assistant. Talk to me in English, Hindi, or Hinglish—ask anything, launch apps, search inside apps, or manage your day."
+            } else {
+                "Hey $userAddress! I'm $assistantName, your personal voice assistant. Talk to me in English, Hindi, or Hinglish—ask anything, launch apps, search inside apps, or manage your day."
+            }
             _messages.value = listOf(
                 ChatMessage(
                     sessionId = "default",
-                    text = "Hello! I am Siri, your personal AI voice assistant on Android. You can speak to me in English, Hindi, or Hinglish. Ask me questions, tell me to open apps, turn on the flashlight, take notes, manage study sessions, analyze photos, or automate your day.",
+                    text = greetingText,
                     isFromUser = false,
                     freshness = InformationFreshness.VERIFIED_SYSTEM
                 )
@@ -630,8 +726,8 @@ class SiriRepository(private val context: Context) {
 
                 list.add(
                     ChatMessage(
-                        id = obj.optString("id"),
-                        sessionId = obj.optString("sessionId", "default"),
+                        id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                        sessionId = obj.optString("sessionId", "default").ifBlank { "default" },
                         text = obj.getString("text"),
                         isFromUser = obj.getBoolean("isFromUser"),
                         timestamp = obj.getLong("timestamp"),
@@ -864,24 +960,69 @@ class SiriRepository(private val context: Context) {
             } else it
         }
         _smartDevices.value = updated
+        saveSmartDevices(updated)
     }
 
     fun addSmartDevice(name: String, type: String) {
-        val dev = SmartDevice("dev_${System.currentTimeMillis()}", name, type, false, "Off")
-        _smartDevices.value = _smartDevices.value + dev
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) return
+        val dev = SmartDevice("dev_${System.currentTimeMillis()}", cleanName, type, false, "Off")
+        val updated = _smartDevices.value + dev
+        _smartDevices.value = updated
+        saveSmartDevices(updated)
     }
 
     fun removeSmartDevice(deviceId: String) {
-        _smartDevices.value = _smartDevices.value.filterNot { it.id == deviceId }
+        val updated = _smartDevices.value.filterNot { it.id == deviceId }
+        _smartDevices.value = updated
+        saveSmartDevices(updated)
+    }
+
+    private fun saveSmartDevices(list: List<SmartDevice>) {
+        val arr = JSONArray()
+        for (d in list) {
+            val obj = JSONObject().apply {
+                put("id", d.id)
+                put("name", d.name)
+                put("type", d.type)
+                put("isOn", d.isOn)
+                put("stateValue", d.stateValue)
+            }
+            arr.put(obj)
+        }
+        prefs.edit().putString("smart_devices_data", arr.toString()).apply()
     }
 
     private fun loadSmartDevices() {
-        _smartDevices.value = listOf(
-            SmartDevice("dev_1", "Living Room Lights", "LIGHT", true, "On (80%)"),
-            SmartDevice("dev_2", "Bedroom Lamp", "LIGHT", false, "Off"),
-            SmartDevice("dev_3", "Desk Smart Plug", "PLUG", true, "On"),
-            SmartDevice("dev_4", "Climate Thermostat", "THERMOSTAT", true, "22°C")
-        )
+        val json = prefs.getString("smart_devices_data", null)
+        if (json.isNullOrBlank()) {
+            _smartDevices.value = listOf(
+                SmartDevice("dev_1", "Living Room Lights", "LIGHT", true, "On (80%)"),
+                SmartDevice("dev_2", "Bedroom Lamp", "LIGHT", false, "Off"),
+                SmartDevice("dev_3", "Desk Smart Plug", "PLUG", true, "On"),
+                SmartDevice("dev_4", "Climate Thermostat", "THERMOSTAT", true, "22°C")
+            )
+            return
+        }
+        try {
+            val arr = JSONArray(json)
+            val list = mutableListOf<SmartDevice>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    SmartDevice(
+                        id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                        name = obj.getString("name"),
+                        type = obj.optString("type", "LIGHT"),
+                        isOn = obj.optBoolean("isOn", false),
+                        stateValue = obj.optString("stateValue", "Off")
+                    )
+                )
+            }
+            _smartDevices.value = list
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     // --- Custom Automations ---

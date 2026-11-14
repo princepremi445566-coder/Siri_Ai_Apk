@@ -18,7 +18,9 @@ import com.example.model.LanguageOption
 import com.example.model.VoiceGender
 import com.example.model.VoicePersonality
 import com.example.model.VoiceState
+import com.example.service.ForegroundAssistantListener
 import com.example.service.SiriNotificationListenerService
+import com.example.service.SiriServiceBridge
 import com.example.voice.SiriSpeechRecognizer
 import com.example.voice.SiriTextToSpeech
 import kotlinx.coroutines.Job
@@ -34,9 +36,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class SiriViewModel(application: Application) : AndroidViewModel(application) {
+class SiriViewModel(application: Application) : AndroidViewModel(application), ForegroundAssistantListener {
 
-    val repository = SiriRepository(application)
+    val repository = SiriRepository.getInstance(application)
     val deviceController = AndroidDeviceController(application)
     val aiBrain = AiBrainRepository(application)
 
@@ -102,6 +104,11 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         initTts()
         initSpeechRecognizer()
         initIntentParser()
+        SiriServiceBridge.attachForegroundListener(this)
+    }
+
+    override fun onWakeWordActivatedInForeground() {
+        startListening()
     }
 
     private fun initTts() {
@@ -111,12 +118,14 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 if (_voiceState.value == VoiceState.SPEAKING) {
                     _voiceState.value = VoiceState.IDLE
-                    // Re-arm listening if continuous mode is enabled
+                    // Re-arm listening if continuous mode is enabled, otherwise return mic to wake-word listener
                     if (repository.continuousListening.value) {
                         viewModelScope.launch {
                             delay(400)
                             startListening()
                         }
+                    } else {
+                        SiriServiceBridge.notifyConversationFinished()
                     }
                 }
             }
@@ -148,6 +157,7 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
             onErrorOccurred = { errorMsg ->
                 Log.d("SiriVM", "Speech error: $errorMsg")
                 _voiceState.value = VoiceState.IDLE
+                SiriServiceBridge.notifyConversationFinished()
             },
             onListeningStateChanged = { listening ->
                 if (listening) {
@@ -164,6 +174,12 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
                     textToSpeech?.stop()
                     _voiceState.value = VoiceState.LISTENING
                 }
+            },
+            onNoMatchOrTimeout = {
+                if (_voiceState.value == VoiceState.LISTENING || _voiceState.value == VoiceState.THINKING) {
+                    _voiceState.value = VoiceState.IDLE
+                }
+                SiriServiceBridge.notifyConversationFinished()
             }
         ).apply {
             setLanguage(repository.selectedLanguage.value)
@@ -183,19 +199,18 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
             },
             onTaskAddTrigger = { taskTitle ->
                 repository.addTask(taskTitle)
-                repository.logActionExecution("ADD_TASK", "Added Task: $taskTitle", true, true, taskTitle)
                 IntentExecutionResult(
                     intentName = "ADD_TASK",
                     parameters = mapOf("title" to taskTitle),
                     feedbackSpeech = "Added '$taskTitle' to your tasks.",
                     success = true,
                     actionSummary = "Added Task: $taskTitle",
-                    isReversible = true
+                    isReversible = true,
+                    undoAction = taskTitle
                 )
             },
             onNoteAddTrigger = { noteTitle, noteContent ->
                 repository.addNote(noteTitle, noteContent)
-                repository.logActionExecution("ADD_NOTE", "Saved Note: $noteTitle", true, false)
                 IntentExecutionResult(
                     intentName = "ADD_NOTE",
                     parameters = mapOf("title" to noteTitle, "content" to noteContent),
@@ -210,12 +225,13 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
             onVoiceGenderTrigger = { gender ->
                 setVoiceGender(gender)
                 val lang = repository.selectedLanguage.value
+                val aName = repository.effectiveAssistantName()
                 val speech = when (gender) {
                     VoiceGender.FEMALE -> {
                         when (lang) {
-                            LanguageOption.HINDI -> "मैंने आवाज़ को फीमेल सिरी आवाज़ पर सेट कर दिया है। मैं आपकी क्या मदद करूँ?"
-                            LanguageOption.HINGLISH -> "Maine voice ko Female Siri voice par set kar diya hai. Kaise madad kar sakti hoon?"
-                            LanguageOption.ENGLISH, LanguageOption.AUTO -> "Voice set to Female Siri voice. How can I help you?"
+                            LanguageOption.HINDI -> "मैंने आवाज़ को फीमेल $aName आवाज़ पर सेट कर दिया है। मैं आपकी क्या मदद करूँ?"
+                            LanguageOption.HINGLISH -> "Maine voice ko Female $aName voice par set kar diya hai. Kaise madad kar sakti hoon?"
+                            LanguageOption.ENGLISH, LanguageOption.AUTO -> "Voice set to Female $aName voice. How can I help you?"
                         }
                     }
                     VoiceGender.MALE -> {
@@ -241,7 +257,10 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
                     actionSummary = "Changed voice to ${gender.displayName}"
                 )
             },
-            getCurrentLanguage = { repository.selectedLanguage.value }
+            getCurrentLanguage = { repository.selectedLanguage.value },
+            getLastAssistantSpeech = { _lastAssistantSpeech.value },
+            getAssistantName = { repository.effectiveAssistantName() },
+            getUserAddress = { repository.effectiveUserAddress() }
         )
     }
 
@@ -259,25 +278,41 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private var listenLaunchJob: Job? = null
+
+    private fun stopActiveAudioWithoutResumingWakeWord() {
+        sessionTimeoutJob?.cancel()
+        listenLaunchJob?.cancel()
+        aiJob?.cancel()
+        textToSpeech?.stop()
+        speechRecognizer?.cancel()
+    }
+
     fun startListening() {
-        stopAllSpeech()
+        SiriServiceBridge.notifyConversationStarted()
+        stopActiveAudioWithoutResumingWakeWord()
         _transcription.value = "Listening..."
         _voiceState.value = VoiceState.LISTENING
-        speechRecognizer?.startListening()
+        listenLaunchJob = viewModelScope.launch {
+            // Allow background wake-word AudioRecord to release mic hardware cleanly
+            delay(120L)
+            if (_voiceState.value == VoiceState.LISTENING) {
+                speechRecognizer?.startListening()
+            }
+        }
     }
 
     fun stopListening() {
         sessionTimeoutJob?.cancel()
         speechRecognizer?.stopListening()
         _voiceState.value = VoiceState.IDLE
+        SiriServiceBridge.notifyConversationFinished()
     }
 
     fun stopAllSpeech() {
-        sessionTimeoutJob?.cancel()
-        aiJob?.cancel()
-        textToSpeech?.stop()
-        speechRecognizer?.cancel()
+        stopActiveAudioWithoutResumingWakeWord()
         _voiceState.value = VoiceState.IDLE
+        SiriServiceBridge.notifyConversationFinished()
     }
 
     fun setPersonality(personality: VoicePersonality) {
@@ -312,6 +347,25 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         textToSpeech?.setPitchMultiplier(multiplier)
     }
 
+    fun updateAssistantIdentity(assistantName: String, userAddress: String) {
+        val cleanAssistant = assistantName.trim().ifBlank { "Siri" }
+        val cleanUser = userAddress.trim().ifBlank { "Friend" }
+        val currentPrefs = repository.userPreferences.value
+        repository.updateUserPreferences(
+            currentPrefs.copy(
+                assistantName = cleanAssistant,
+                userName = cleanUser
+            )
+        )
+        val currentAi = repository.aiConfig.value
+        repository.updateAiConfig(
+            currentAi.copy(customGreeting = "Hey $cleanUser! I'm $cleanAssistant. How can I help you today?")
+        )
+        viewModelScope.launch {
+            _uiEvents.emit("Assistant updated: $cleanAssistant (addressing you as $cleanUser)")
+        }
+    }
+
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
     }
@@ -321,7 +375,13 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         val (ok, _) = deviceController.setFlashlight(next)
         if (ok) {
             _isTorchActive.value = next
-            repository.logActionExecution("FLASHLIGHT", if (next) "Turned on Flashlight" else "Turned off Flashlight", true, true)
+            repository.logActionExecution(
+                actionName = if (next) "FLASHLIGHT_ON" else "FLASHLIGHT_OFF",
+                summary = if (next) "Turned on Flashlight" else "Turned off Flashlight",
+                isSuccess = true,
+                isReversible = true,
+                undoPayload = if (next) "FLASHLIGHT_OFF" else "FLASHLIGHT_ON"
+            )
         }
     }
 
@@ -336,6 +396,19 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun emitUiEvent(message: String) {
+        viewModelScope.launch {
+            _uiEvents.emit(message)
+        }
+    }
+
+    fun speakAloud(text: String) {
+        if (text.isBlank()) return
+        stopActiveAudioWithoutResumingWakeWord()
+        _lastAssistantSpeech.value = text
+        speakResponse(text)
+    }
+
     /**
      * Main entry point for user voice or typed input
      */
@@ -343,16 +416,19 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         val cleanText = intentParser.cleanWakePhrase(rawText).trim()
         if (cleanText.isEmpty()) {
             _voiceState.value = VoiceState.IDLE
+            SiriServiceBridge.notifyConversationFinished()
             return
         }
 
         // Cancel any pending outdated AI request
         aiJob?.cancel()
 
+        val requestSessionId = repository.currentSessionId.value
+
         // Add user chat bubble
         val currentImage = _selectedImageUri.value
         val userMsg = ChatMessage(
-            sessionId = repository.currentSessionId.value,
+            sessionId = requestSessionId,
             text = rawText,
             isFromUser = true,
             imageUri = currentImage?.toString()
@@ -368,7 +444,10 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Check if user asks to read notifications
-        if (cleanText.contains("read my notification") || cleanText.contains("check notification") || cleanText.contains("summarize notification")) {
+        if (cleanText.contains("read my notification", ignoreCase = true) ||
+            cleanText.contains("check notification", ignoreCase = true) ||
+            cleanText.contains("summarize notification", ignoreCase = true)
+        ) {
             readNotifications()
             return
         }
@@ -376,7 +455,7 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         // 1. Try local system intent execution first
         val localIntentResult = intentParser.parseAndExecute(cleanText)
         if (localIntentResult != null) {
-            handleIntentResult(localIntentResult)
+            handleIntentResult(localIntentResult, requestSessionId)
             return
         }
 
@@ -384,19 +463,20 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         _voiceState.value = VoiceState.THINKING
         aiJob = viewModelScope.launch {
             try {
-                val currentSessionMsgs = repository.messages.value.filter { it.sessionId == repository.currentSessionId.value }
-                val recentPairs = currentSessionMsgs.takeLast(10).map { it.text to it.isFromUser }
+                val currentSessionMsgs = repository.messages.value.filter { it.sessionId == requestSessionId }
+                val recentPairs = currentSessionMsgs.dropLast(1).takeLast(12).map { it.text to it.isFromUser }
                 val aiResult = aiBrain.generateResponse(
                     prompt = cleanText,
                     config = repository.aiConfig.value,
                     language = repository.selectedLanguage.value,
                     recentHistory = recentPairs,
-                    imageUri = currentImage
+                    imageUri = currentImage,
+                    userPrefs = repository.userPreferences.value
                 )
 
                 _lastAssistantSpeech.value = aiResult.text
                 val assistantMsg = ChatMessage(
-                    sessionId = repository.currentSessionId.value,
+                    sessionId = requestSessionId,
                     text = aiResult.text,
                     isFromUser = false,
                     freshness = InformationFreshness.AI_INTERPRETATION,
@@ -410,7 +490,7 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
                 val errMsg = "Sorry, I had trouble processing that request. Please try again."
                 repository.addMessage(
                     ChatMessage(
-                        sessionId = repository.currentSessionId.value,
+                        sessionId = requestSessionId,
                         text = errMsg,
                         isFromUser = false,
                         isError = true
@@ -421,7 +501,7 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun handleIntentResult(result: IntentExecutionResult) {
+    private fun handleIntentResult(result: IntentExecutionResult, sessionId: String = repository.currentSessionId.value) {
         _lastAssistantSpeech.value = result.feedbackSpeech
         if (result.intentName.startsWith("FLASHLIGHT")) {
             _isTorchActive.value = deviceController.isFlashlightActive()
@@ -433,7 +513,7 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val assistantMsg = ChatMessage(
-            sessionId = repository.currentSessionId.value,
+            sessionId = sessionId,
             text = result.feedbackSpeech,
             isFromUser = false,
             actionType = result.intentName,
@@ -447,6 +527,7 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun speakResponse(text: String) {
+        SiriServiceBridge.notifyConversationStarted()
         _voiceState.value = VoiceState.SPEAKING
         textToSpeech?.speak(text)
     }
@@ -461,7 +542,9 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun generateDailyBriefing(): IntentExecutionResult {
         val prefs = repository.userPreferences.value
-        val name = prefs.userName
+        val name = prefs.userName.trim().ifBlank { "Friend" }
+        val assistantName = prefs.assistantName.trim().ifBlank { "Siri" }
+        val lang = repository.selectedLanguage.value
         val date = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault()).format(Date())
         val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date())
         val batteryInfo = deviceController.getBatteryInfo()
@@ -469,13 +552,26 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
         val pendingTasks = repository.tasks.value.filter { !it.isCompleted }
         val highPriority = pendingTasks.filter { it.priority == "High" }
 
-        val taskSummary = if (pendingTasks.isEmpty()) {
-            "You have no pending tasks today."
-        } else {
-            "You have ${pendingTasks.size} pending tasks${if (highPriority.isNotEmpty()) ", including ${highPriority.size} high priority" else ""}."
+        val speech = when (lang) {
+            LanguageOption.HINDI -> {
+                val taskHi = if (pendingTasks.isEmpty()) "आज आपका कोई काम बाकी नहीं है।"
+                else "आपके ${pendingTasks.size} काम बाकी हैं${if (highPriority.isNotEmpty()) ", जिनमें ${highPriority.size} ज़रूरी हैं" else ""}।"
+                "नमस्ते $name, मैं $assistantName बोल रही हूँ! आज $date है और अभी समय $time हुआ है। $taskHi आपका दिन शानदार हो!"
+            }
+            LanguageOption.HINGLISH -> {
+                val taskHinglish = if (pendingTasks.isEmpty()) "Aaj aapke paas koi pending task nahi hai."
+                else "Aapke ${pendingTasks.size} tasks pending hain${if (highPriority.isNotEmpty()) ", jismein ${highPriority.size} high priority hain" else ""}."
+                "Hey $name, main $assistantName hoon! Aaj $date hai aur abhi $time ho rahe hain. $taskHinglish Have a great day!"
+            }
+            LanguageOption.ENGLISH, LanguageOption.AUTO -> {
+                val taskSummary = if (pendingTasks.isEmpty()) {
+                    "You have no pending tasks today."
+                } else {
+                    "You have ${pendingTasks.size} pending tasks${if (highPriority.isNotEmpty()) ", including ${highPriority.size} high priority" else ""}."
+                }
+                "Good day, $name! This is $assistantName. Today is $date, and it's $time. $batteryInfo $networkInfo $taskSummary Have a wonderful day!"
+            }
         }
-
-        val speech = "Good day, $name! Today is $date, and it's $time. $batteryInfo $networkInfo $taskSummary Have a wonderful day!"
         return IntentExecutionResult(
             intentName = "DAILY_BRIEFING",
             feedbackSpeech = speech,
@@ -498,24 +594,28 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
             "FLASHLIGHT_ON" -> {
                 val (ok, _) = deviceController.setFlashlight(false)
                 _isTorchActive.value = false
+                if (ok) repository.markActionLogUndone(lastLog.id)
                 IntentExecutionResult("UNDO_FLASHLIGHT", emptyMap(), "Turned off flashlight.", ok, "Undid Flashlight ON")
             }
             "FLASHLIGHT_OFF" -> {
                 val (ok, _) = deviceController.setFlashlight(true)
                 _isTorchActive.value = true
+                if (ok) repository.markActionLogUndone(lastLog.id)
                 IntentExecutionResult("UNDO_FLASHLIGHT", emptyMap(), "Turned flashlight back on.", ok, "Undid Flashlight OFF")
             }
             "ADD_TASK" -> {
                 val title = lastLog.undoPayload
                 if (title != null) {
-                    val task = repository.tasks.value.firstOrNull { it.title == title }
+                    val task = repository.tasks.value.lastOrNull { it.title == title }
                     if (task != null) {
                         repository.removeTask(task.id)
                     }
                 }
+                repository.markActionLogUndone(lastLog.id)
                 IntentExecutionResult("UNDO_TASK", emptyMap(), "Removed the task you just added.", true, "Undid Task addition")
             }
             else -> {
+                repository.markActionLogUndone(lastLog.id)
                 IntentExecutionResult("UNDO", emptyMap(), "Action cannot be undone automatically.", false, "Undo unsupported")
             }
         }
@@ -525,6 +625,7 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
      * Executes custom multi-step routine
      */
     fun executeRoutine(routine: AutomationRoutine): IntentExecutionResult {
+        var spokenStepFeedback: String? = null
         viewModelScope.launch {
             for (step in routine.steps) {
                 when (step.actionType) {
@@ -553,13 +654,17 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
                         deviceController.openApp(step.parameter)
                     }
                     "SPEAK" -> {
-                        speakResponse(step.parameter)
+                        // Spoken summary handled via returned feedbackSpeech to avoid overlapping TTS calls
+                        if (step.parameter.isNotBlank()) {
+                            spokenStepFeedback = step.parameter
+                        }
                     }
                 }
-                delay(350)
+                delay(250)
             }
         }
-        val feedback = "Running '${routine.name}' routine with ${routine.steps.size} steps."
+        val speakStep = routine.steps.firstOrNull { it.actionType == "SPEAK" && it.parameter.isNotBlank() }?.parameter
+        val feedback = speakStep ?: spokenStepFeedback ?: "Running '${routine.name}' routine with ${routine.steps.size} steps."
         return IntentExecutionResult(
             intentName = "AUTOMATION_ROUTINE",
             parameters = mapOf("routine" to routine.name),
@@ -665,6 +770,8 @@ class SiriViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        SiriServiceBridge.detachForegroundListener(this)
+        SiriServiceBridge.notifyConversationFinished()
         textToSpeech?.shutdown()
         speechRecognizer?.destroy()
         focusTimerJob?.cancel()

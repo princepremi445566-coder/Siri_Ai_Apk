@@ -1,7 +1,12 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -95,6 +100,9 @@ fun VoiceAssistantScreen(
     val personality by viewModel.repository.voicePersonality.collectAsState()
     val voiceGender by viewModel.repository.voiceGender.collectAsState()
     val language by viewModel.repository.selectedLanguage.collectAsState()
+    val userPrefs by viewModel.repository.userPreferences.collectAsState()
+    val assistantName = userPrefs.assistantName.trim().ifBlank { "Siri" }
+    val userAddress = userPrefs.userName.trim().ifBlank { "Friend" }
     val messages by viewModel.repository.messages.collectAsState()
     val sessions by viewModel.repository.sessions.collectAsState()
     val currentSessionId by viewModel.repository.currentSessionId.collectAsState()
@@ -104,21 +112,48 @@ fun VoiceAssistantScreen(
     var textInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            if (viewModel.repository.backgroundServiceEnabled.value && viewModel.repository.wakeWordEnabled.value) {
+                com.example.service.SiriVoiceService.start(context)
+            }
+            viewModel.startListening()
+        } else {
+            viewModel.emitUiEvent("Microphone permission is needed to listen. Enable it in Privacy tab or App Settings.")
+        }
+    }
+
+    val startVoiceWithPermissionCheck: () -> Unit = {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            viewModel.startListening()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    val currentSessionMessages = remember(messages, currentSessionId, historySearchQuery) {
+        messages.filter {
+            it.sessionId == currentSessionId &&
+                (historySearchQuery.isBlank() || it.text.contains(historySearchQuery, ignoreCase = true))
+        }
+    }
+
     LaunchedEffect(Unit) {
         viewModel.uiEvents.collect { msg ->
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    LaunchedEffect(currentSessionMessages.size, showHistoryDialog) {
+        if (showHistoryDialog && currentSessionMessages.isNotEmpty()) {
+            listState.animateScrollToItem(currentSessionMessages.size - 1)
         }
-    }
-
-    val currentSessionMessages = messages.filter {
-        it.sessionId == currentSessionId &&
-        (historySearchQuery.isBlank() || it.text.contains(historySearchQuery, ignoreCase = true))
     }
 
     Box(
@@ -195,7 +230,7 @@ fun VoiceAssistantScreen(
                     ) {
                         Text(
                             text = when (voiceGender) {
-                                VoiceGender.FEMALE -> "👩 Female Siri"
+                                VoiceGender.FEMALE -> "👩 Female $assistantName"
                                 VoiceGender.MALE -> "👨 Male Voice"
                                 VoiceGender.SYSTEM_DEFAULT -> "⚙️ System Voice"
                             },
@@ -295,15 +330,16 @@ fun VoiceAssistantScreen(
                 SiriOrb(
                     voiceState = voiceState,
                     audioLevel = audioLevel,
+                    reducedMotion = userPrefs.reducedMotion,
                     onClick = {
                         if (voiceState == VoiceState.LISTENING) {
                             viewModel.stopListening()
                         } else if (voiceState == VoiceState.SPEAKING) {
                             // Instant voice interruption and transition to listening for follow-up
                             viewModel.stopAllSpeech()
-                            viewModel.startListening()
+                            startVoiceWithPermissionCheck()
                         } else {
-                            viewModel.startListening()
+                            startVoiceWithPermissionCheck()
                         }
                     }
                 )
@@ -341,7 +377,11 @@ fun VoiceAssistantScreen(
                     voiceState == VoiceState.THINKING -> "Thinking..."
                     lastSpeech.isNotBlank() -> lastSpeech
                     lastMsg != null -> lastMsg.text
-                    else -> "How can I help you?"
+                    else -> if (userAddress.equals("Friend", ignoreCase = true)) {
+                        "How can I help you?"
+                    } else {
+                        "How can I help you, $userAddress?"
+                    }
                 }
 
                 Card(
@@ -360,7 +400,7 @@ fun VoiceAssistantScreen(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = if (voiceState == VoiceState.LISTENING) "You:" else "Siri:",
+                                    text = if (voiceState == VoiceState.LISTENING) "You:" else "$assistantName:",
                                     color = if (voiceState == VoiceState.LISTENING) SiriLightGold else SiriGold,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
@@ -371,7 +411,7 @@ fun VoiceAssistantScreen(
                                 // Speak / Read Aloud button
                                 if (displayText.isNotBlank() && voiceState == VoiceState.IDLE) {
                                     IconButton(
-                                        onClick = { viewModel.handleUserUtterance("repeat that") },
+                                        onClick = { viewModel.speakAloud(displayText) },
                                         modifier = Modifier.size(28.dp).testTag("read_aloud_button")
                                     ) {
                                         Icon(
@@ -612,7 +652,7 @@ fun VoiceAssistantScreen(
                             .weight(1f),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(currentSessionMessages) { msg ->
+                        items(currentSessionMessages, key = { it.id }) { msg ->
                             val isUser = msg.isFromUser
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -637,7 +677,7 @@ fun VoiceAssistantScreen(
                                         ) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Text(
-                                                    text = if (isUser) "You" else "Siri",
+                                                    text = if (isUser) "You" else assistantName,
                                                     color = if (isUser) SiriCyan else SiriMagenta,
                                                     fontWeight = FontWeight.Bold,
                                                     fontSize = 11.sp
@@ -704,7 +744,7 @@ fun VoiceAssistantScreen(
                 OutlinedTextField(
                     value = textInput,
                     onValueChange = { textInput = it },
-                    placeholder = { Text("Ask Siri anything...", color = SiriTextSecondary, fontSize = 14.sp) },
+                    placeholder = { Text("Ask $assistantName anything...", color = SiriTextSecondary, fontSize = 14.sp) },
                     modifier = Modifier
                         .weight(1f)
                         .testTag("siri_text_input"),
@@ -756,7 +796,7 @@ fun VoiceAssistantScreen(
                     val isListening = voiceState == VoiceState.LISTENING
                     IconButton(
                         onClick = {
-                            if (isListening) viewModel.stopListening() else viewModel.startListening()
+                            if (isListening) viewModel.stopListening() else startVoiceWithPermissionCheck()
                         },
                         modifier = Modifier
                             .size(52.dp)

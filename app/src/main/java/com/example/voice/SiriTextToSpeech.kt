@@ -19,8 +19,15 @@ class SiriTextToSpeech(
     private val onStateChange: (isSpeaking: Boolean) -> Unit
 ) : TextToSpeech.OnInitListener {
 
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var tts: TextToSpeech? = TextToSpeech(context.applicationContext, this)
     private var isInitialized = false
+    private var isShutdown = false
+    private var pendingUtterance: Pair<String, String>? = null
+
+    @Volatile
+    var lastVoiceFallbackNote: String? = null
+        private set
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -33,37 +40,57 @@ class SiriTextToSpeech(
 
     private var activeFinalUtteranceId: String? = null
 
+    private fun notifyState(isSpeaking: Boolean) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            onStateChange(isSpeaking)
+        } else {
+            mainHandler.post { onStateChange(isSpeaking) }
+        }
+    }
+
     override fun onInit(status: Int) {
+        if (isShutdown) return
         if (status == TextToSpeech.SUCCESS) {
             isInitialized = true
             applyVoiceSettings()
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     requestAudioFocus()
-                    onStateChange(true)
+                    notifyState(true)
                 }
 
                 override fun onDone(utteranceId: String?) {
                     if (utteranceId == activeFinalUtteranceId || activeFinalUtteranceId == null) {
                         abandonAudioFocus()
-                        onStateChange(false)
+                        notifyState(false)
                     }
                 }
 
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
                     abandonAudioFocus()
-                    onStateChange(false)
+                    notifyState(false)
                 }
 
                 override fun onError(utteranceId: String?, errorCode: Int) {
                     abandonAudioFocus()
-                    onStateChange(false)
+                    notifyState(false)
                 }
             })
             Log.d("SiriTTS", "TextToSpeech successfully initialized")
+            val pending = pendingUtterance
+            pendingUtterance = null
+            if (pending != null) {
+                mainHandler.post {
+                    if (!isShutdown) {
+                        speak(pending.first, pending.second)
+                    }
+                }
+            }
         } else {
             Log.e("SiriTTS", "TextToSpeech initialization failed with status $status")
+            pendingUtterance = null
+            notifyState(false)
         }
     }
 
@@ -139,6 +166,7 @@ class SiriTextToSpeech(
 
     private fun applyGenderVoice(targetLocale: Locale) {
         val engine = tts ?: return
+        lastVoiceFallbackNote = null
         try {
             val availableVoices = engine.voices
             if (!availableVoices.isNullOrEmpty()) {
@@ -147,26 +175,41 @@ class SiriTextToSpeech(
                 }
                 val pool = if (matchingLocaleVoices.isNotEmpty()) matchingLocaleVoices else availableVoices.toList()
 
+                fun isFemaleVoice(voice: android.speech.tts.Voice): Boolean {
+                    val n = voice.name.lowercase(Locale.ROOT)
+                    val feats = voice.features?.joinToString(",")?.lowercase(Locale.ROOT).orEmpty()
+                    return (feats.contains("female") || n.contains("female") || n.contains("#female") ||
+                        n.contains("-fem-") || n.contains("_fem") || n.contains("sfg") || n.contains("f00") ||
+                        n.contains("woman") || n.contains("hia") || n.contains("hic") ||
+                        n.contains("hie") || n.contains("cfn") || n.contains("-a-") || n.contains("-c-") ||
+                        n.contains("-d-") || n.contains("-f-") || n.contains("end") || n.contains("ene") ||
+                        n.contains("tpf")) && !n.contains("male_") && !n.contains("-male-")
+                }
+
+                fun isMaleVoice(voice: android.speech.tts.Voice): Boolean {
+                    val n = voice.name.lowercase(Locale.ROOT)
+                    val feats = voice.features?.joinToString(",")?.lowercase(Locale.ROOT).orEmpty()
+                    return (feats.contains("male") && !feats.contains("female")) ||
+                        ((n.contains("male") || n.contains("-male-") || n.contains("_male") ||
+                            n.contains("m00") || n.contains("man") || n.contains("hib") ||
+                            n.contains("hid") || n.contains("-b-") || n.contains("-e-") ||
+                            n.contains("enc") || n.contains("iom")) && !n.contains("female"))
+                }
+
                 val selectedVoice = when (currentVoiceGender) {
                     VoiceGender.FEMALE -> {
-                        pool.firstOrNull { voice ->
-                            val n = voice.name.lowercase()
-                            (n.contains("female") || n.contains("#female") || n.contains("-fem-") ||
-                             n.contains("_fem") || n.contains("sfg") || n.contains("f00") ||
-                             n.contains("woman") || n.contains("hia") || n.contains("hic") ||
-                             n.contains("hie") || n.contains("-a-") || n.contains("-c-") ||
-                             n.contains("-d-") || n.contains("-f-") || n.contains("end") || n.contains("ene")) &&
-                             !n.contains("male_")
-                        } ?: pool.firstOrNull()
+                        val exact = pool.firstOrNull { isFemaleVoice(it) }
+                        if (exact == null) {
+                            lastVoiceFallbackNote = "Dedicated female engine voice unavailable on device; using pitch-tuned fallback."
+                        }
+                        exact ?: pool.firstOrNull()
                     }
                     VoiceGender.MALE -> {
-                        pool.firstOrNull { voice ->
-                            val n = voice.name.lowercase()
-                            (n.contains("male") || n.contains("-male-") || n.contains("_male") ||
-                             n.contains("m00") || n.contains("man") || n.contains("hib") ||
-                             n.contains("hid") || n.contains("-b-") || n.contains("-e-") ||
-                             n.contains("enc")) && !n.contains("female")
-                        } ?: pool.firstOrNull()
+                        val exact = pool.firstOrNull { isMaleVoice(it) }
+                        if (exact == null) {
+                            lastVoiceFallbackNote = "Dedicated male engine voice unavailable on device; using pitch-tuned fallback."
+                        }
+                        exact ?: pool.firstOrNull()
                     }
                     VoiceGender.SYSTEM_DEFAULT -> null
                 }
@@ -181,7 +224,7 @@ class SiriTextToSpeech(
     }
 
     fun sanitizeForSpeech(text: String): String {
-        return text
+        val stripped = text
             .replace(Regex("""\*\*([^*]+)\*\*"""), "$1")
             .replace(Regex("""\*([^*]+)\*"""), "$1")
             .replace(Regex("""__([^_]+)__"""), "$1")
@@ -193,8 +236,28 @@ class SiriTextToSpeech(
             .replace(Regex("""https?://\S+"""), "")
             .replace(Regex("""^\s*[-*•]\s+""", RegexOption.MULTILINE), "")
             .replace(Regex("""^\s*\d+\.\s+""", RegexOption.MULTILINE), "")
-            .replace(Regex("""\s*[-—–]{1,2}\s*"""), ", ")
+            .replace(Regex("""\s*[—–]+\s*"""), ", ")
+            .replace(Regex("""\s+-\s+"""), ", ")
             .replace(Regex("""[\uD83C-\uDBFF\uDC00-\uDFFF]"""), "")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        return normalizePronunciation(stripped)
+    }
+
+    /**
+     * Smooths abbreviations, units, and symbols so TTS pronounces replies naturally like a human.
+     */
+    fun normalizePronunciation(text: String): String {
+        return text
+            .replace(Regex("""\be\.g\.?\b""", RegexOption.IGNORE_CASE), "for example")
+            .replace(Regex("""\bi\.e\.?\b""", RegexOption.IGNORE_CASE), "that is")
+            .replace(Regex("""\betc\.?(?=\s|$)""", RegexOption.IGNORE_CASE), "and so on")
+            .replace(Regex("""\bvs\.?\b""", RegexOption.IGNORE_CASE), "versus")
+            .replace(Regex("""(\d+)\s*°\s*C\b""", RegexOption.IGNORE_CASE), "$1 degrees Celsius")
+            .replace(Regex("""(\d+)\s*°\s*F\b""", RegexOption.IGNORE_CASE), "$1 degrees Fahrenheit")
+            .replace(Regex("""(\d+)\s*km/h\b""", RegexOption.IGNORE_CASE), "$1 kilometers per hour")
+            .replace(Regex("""(\d+)\s*%"""), "$1 percent")
+            .replace(Regex("""\s+&\s+"""), " and ")
             .replace(Regex("""\s+"""), " ")
             .trim()
     }
@@ -208,7 +271,9 @@ class SiriTextToSpeech(
         val hinglishMarkers = listOf(
             "hai", "hain", "karo", "kya", "batao", "samachar", "chalu", "shant",
             "kaise", "samay", "namaste", "dhanyawad", "shukriya", "bilkul",
-            "badhiya", "theek", "hoon", "aaj", "kal", "diya", "madad", "chutkula"
+            "badhiya", "theek", "hoon", "aaj", "kal", "diya", "madad", "chutkula",
+            "haan", "nahi", "accha", "bhai", "yaar", "samjho", "bata", "naam",
+            "mera", "tumhara", "aapka", "kyunki", "kholo", "raha", "rahi", "hun"
         )
         val matchCount = hinglishMarkers.count { lower.contains(Regex("""\b$it\b""")) }
         return if (matchCount >= 1) {
@@ -261,41 +326,92 @@ class SiriTextToSpeech(
     }
 
     fun speak(text: String, utteranceId: String = "siri_speech_${System.currentTimeMillis()}") {
-        if (!isInitialized || tts == null) {
-            Log.w("SiriTTS", "TTS not initialized yet")
+        if (isShutdown) {
+            notifyState(false)
             return
         }
-        stop()
-
         val clean = sanitizeForSpeech(text)
-        if (clean.isBlank()) return
+        if (clean.isBlank()) {
+            notifyState(false)
+            return
+        }
+
+        if (!isInitialized || tts == null) {
+            Log.w("SiriTTS", "TTS initializing; queuing utterance")
+            pendingUtterance = text to utteranceId
+            return
+        }
+        stopInternal(notifyIdle = false)
 
         // Always apply target locale, pitch, speed, and gender voice for this utterance
         applyVoiceSettings(clean)
 
-        // Split by sentence boundaries to insert natural breath pauses
-        val sentences = clean.split(Regex("""(?<=[.!?])\s+""")).filter { it.isNotBlank() }
-        if (sentences.isEmpty()) return
+        // Split into natural spoken chunks with sentence (~180ms) and clause (~65ms) pauses
+        val speechChunks = buildSpokenChunksWithPauses(clean)
+        if (speechChunks.isEmpty()) {
+            notifyState(false)
+            return
+        }
 
         val finalId = "${utteranceId}_final"
         activeFinalUtteranceId = finalId
 
-        for ((index, sentence) in sentences.withIndex()) {
-            val isLast = (index == sentences.lastIndex)
+        var queuedAny = false
+        for ((index, chunk) in speechChunks.withIndex()) {
+            val (phrase, pauseAfterMs) = chunk
+            val isLast = (index == speechChunks.lastIndex)
             val chunkId = if (isLast) finalId else "${utteranceId}_part_$index"
             val params = Bundle().apply {
                 putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, chunkId)
             }
             val queueMode = if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-            tts?.speak(sentence, queueMode, params, chunkId)
-            if (!isLast) {
-                // Calm, natural 140ms micro-pause between sentences
-                tts?.playSilentUtterance(140L, TextToSpeech.QUEUE_ADD, null)
+            val result = tts?.speak(phrase, queueMode, params, chunkId) ?: TextToSpeech.ERROR
+            if (result == TextToSpeech.SUCCESS) {
+                queuedAny = true
+                if (!isLast && pauseAfterMs > 0L) {
+                    tts?.playSilentUtterance(pauseAfterMs, TextToSpeech.QUEUE_ADD, null)
+                }
+            } else {
+                Log.w("SiriTTS", "TTS speak() returned error $result")
+                break
             }
+        }
+        if (!queuedAny) {
+            activeFinalUtteranceId = null
+            abandonAudioFocus()
+            notifyState(false)
         }
     }
 
-    fun stop() {
+    /**
+     * Breaks sanitized text into sentences and long clauses with natural human breath pauses.
+     */
+    fun buildSpokenChunksWithPauses(cleanText: String): List<Pair<String, Long>> {
+        val sentences = cleanText.split(Regex("""(?<=[.!?।])\s+""")).filter { it.isNotBlank() }
+        val result = mutableListOf<Pair<String, Long>>()
+        for ((sIdx, sentence) in sentences.withIndex()) {
+            val isLastSentence = (sIdx == sentences.lastIndex)
+            // Split longer sentences along major clause boundaries for natural human pacing
+            val clauses = if (sentence.length > 55) {
+                sentence.split(Regex("""(?<=[,;:])\s+""")).filter { it.isNotBlank() }
+            } else {
+                listOf(sentence)
+            }
+            for ((cIdx, clause) in clauses.withIndex()) {
+                val isLastClauseInSentence = (cIdx == clauses.lastIndex)
+                val pauseMs = when {
+                    isLastSentence && isLastClauseInSentence -> 0L
+                    isLastClauseInSentence -> 180L // natural breath pause between sentences
+                    else -> 65L // light phrasing pause on commas/semicolons
+                }
+                result.add(clause to pauseMs)
+            }
+        }
+        return result
+    }
+
+    private fun stopInternal(notifyIdle: Boolean) {
+        pendingUtterance = null
         activeFinalUtteranceId = null
         try {
             tts?.stop()
@@ -303,10 +419,19 @@ class SiriTextToSpeech(
             Log.e("SiriTTS", "Error stopping TTS", e)
         }
         abandonAudioFocus()
-        onStateChange(false)
+        if (notifyIdle) {
+            notifyState(false)
+        }
+    }
+
+    fun stop() {
+        stopInternal(notifyIdle = true)
     }
 
     fun shutdown() {
+        isShutdown = true
+        pendingUtterance = null
+        activeFinalUtteranceId = null
         try {
             tts?.stop()
             tts?.shutdown()

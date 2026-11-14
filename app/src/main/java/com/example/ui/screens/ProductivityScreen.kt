@@ -151,7 +151,7 @@ fun ProductivityScreen(
 
     val minutes = focusRemaining / 60
     val seconds = focusRemaining % 60
-    val formattedTime = String.format("%02d:%02d", minutes, seconds)
+    val formattedTime = String.format(java.util.Locale.US, "%02d:%02d", minutes, seconds)
 
     // Conflict detection: find task times with multiple items
     val timeConflicts = tasks
@@ -627,7 +627,16 @@ fun ProductivityScreen(
                                     value = newNoteTitle,
                                     onValueChange = { newNoteTitle = it },
                                     placeholder = { Text("Title", color = SiriTextSecondary, fontSize = 12.sp) },
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriCyan,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF101927),
+                                        unfocusedContainerColor = Color(0xFF101927),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    ),
+                                    singleLine = true
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedTextField(
@@ -635,6 +644,14 @@ fun ProductivityScreen(
                                     onValueChange = { newNoteContent = it },
                                     placeholder = { Text("Note content...", color = SiriTextSecondary, fontSize = 12.sp) },
                                     modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriCyan,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF101927),
+                                        unfocusedContainerColor = Color(0xFF101927),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    ),
                                     maxLines = 4
                                 )
                                 Spacer(modifier = Modifier.height(10.dp))
@@ -739,14 +756,30 @@ fun ProductivityScreen(
                                     value = newCardQuestion,
                                     onValueChange = { newCardQuestion = it },
                                     placeholder = { Text("Question or Prompt", color = SiriTextSecondary, fontSize = 12.sp) },
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriViolet,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF151024),
+                                        unfocusedContainerColor = Color(0xFF151024),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    )
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedTextField(
                                     value = newCardAnswer,
                                     onValueChange = { newCardAnswer = it },
                                     placeholder = { Text("Answer", color = SiriTextSecondary, fontSize = 12.sp) },
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriViolet,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF151024),
+                                        unfocusedContainerColor = Color(0xFF151024),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    )
                                 )
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -878,14 +911,32 @@ fun ProductivityScreen(
                                     value = newShortcutTrigger,
                                     onValueChange = { newShortcutTrigger = it },
                                     placeholder = { Text("Trigger (e.g. “leaving home”)", color = SiriTextSecondary, fontSize = 12.sp) },
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriCyan,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF101927),
+                                        unfocusedContainerColor = Color(0xFF101927),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    ),
+                                    singleLine = true
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedTextField(
                                     value = newShortcutCommand,
                                     onValueChange = { newShortcutCommand = it },
                                     placeholder = { Text("Action (e.g. “turn off flashlight”)", color = SiriTextSecondary, fontSize = 12.sp) },
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SiriCyan,
+                                        unfocusedBorderColor = Color(0xFF28364D),
+                                        focusedContainerColor = Color(0xFF101927),
+                                        unfocusedContainerColor = Color(0xFF101927),
+                                        focusedTextColor = SiriTextPrimary,
+                                        unfocusedTextColor = SiriTextPrimary
+                                    ),
+                                    singleLine = true
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1020,29 +1071,23 @@ fun ProductivityScreen(
                     Text("Smart Home Controls", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        for (dev in smartDevices.take(2)) {
-                            SmartDeviceCard(
-                                device = dev,
-                                modifier = Modifier.weight(1f),
-                                onToggle = { viewModel.repository.toggleSmartDevice(dev.id) }
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        for (dev in smartDevices.drop(2).take(2)) {
-                            SmartDeviceCard(
-                                device = dev,
-                                modifier = Modifier.weight(1f),
-                                onToggle = { viewModel.repository.toggleSmartDevice(dev.id) }
-                            )
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        for (rowDevices in smartDevices.chunked(2)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                for (dev in rowDevices) {
+                                    SmartDeviceCard(
+                                        device = dev,
+                                        modifier = Modifier.weight(1f),
+                                        onToggle = { viewModel.repository.toggleSmartDevice(dev.id) }
+                                    )
+                                }
+                                if (rowDevices.size == 1) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
                         }
                     }
                 }

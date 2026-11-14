@@ -48,6 +48,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,6 +65,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.service.SiriNotificationListenerService
 import com.example.ui.theme.SiriCyan
 import com.example.ui.theme.SiriDarkBackground
@@ -91,17 +95,40 @@ fun PrivacyScreen(
     var editHome by remember(userPrefs.homeLocation) { mutableStateOf(userPrefs.homeLocation) }
     var editWork by remember(userPrefs.workLocation) { mutableStateOf(userPrefs.workLocation) }
 
-    val hasMicPermission = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var hasMicPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var isNotifListenerActive by remember {
+        mutableStateOf(SiriNotificationListenerService.isConnected)
+    }
 
-    val hasCameraPermission = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.CAMERA
-    ) == PackageManager.PERMISSION_GRANTED
-
-    val isNotifListenerActive = SiriNotificationListenerService.isConnected
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasMicPermission = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+                hasCameraPermission = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.CAMERA
+                ) == PackageManager.PERMISSION_GRANTED
+                isNotifListenerActive = SiriNotificationListenerService.isConnected
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     val scrollState = rememberScrollState()
 

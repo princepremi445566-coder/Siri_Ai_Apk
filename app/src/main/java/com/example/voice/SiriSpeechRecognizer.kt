@@ -16,7 +16,8 @@ class SiriSpeechRecognizer(
     private val onRmsDbChanged: (Float) -> Unit,
     private val onErrorOccurred: (String) -> Unit,
     private val onListeningStateChanged: (Boolean) -> Unit,
-    private val onSpeechDetected: (() -> Unit)? = null
+    private val onSpeechDetected: (() -> Unit)? = null,
+    private val onNoMatchOrTimeout: (() -> Unit)? = null
 ) {
 
     private var speechRecognizer: SpeechRecognizer? = null
@@ -78,9 +79,19 @@ class SiriSpeechRecognizer(
                         else -> "Speech recognition error ($error)"
                     }
                     Log.d("SiriSpeech", "Recognition error: $errorMsg")
+                    // Rebuild recognizer if Android's SpeechRecognizer reports busy/client state
+                    if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) {
+                        try {
+                            speechRecognizer?.destroy()
+                        } catch (_: Exception) {
+                        }
+                        speechRecognizer = null
+                    }
                     // Do not treat silence as a fatal error
                     if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                         onErrorOccurred(errorMsg)
+                    } else {
+                        onNoMatchOrTimeout?.invoke()
                     }
                 }
 
@@ -94,11 +105,14 @@ class SiriSpeechRecognizer(
                         // Duplicate prevention: ignore if exact same text within 1500ms
                         if (spokenText.equals(lastRecognizedText, ignoreCase = true) && (now - lastRecognizedTimestamp) < 1500) {
                             Log.d("SiriSpeech", "Debounced duplicate speech command: $spokenText")
+                            onNoMatchOrTimeout?.invoke()
                             return
                         }
                         lastRecognizedText = spokenText
                         lastRecognizedTimestamp = now
                         onResult(spokenText)
+                    } else {
+                        onNoMatchOrTimeout?.invoke()
                     }
                 }
 
@@ -136,15 +150,15 @@ class SiriSpeechRecognizer(
 
             val langLocale = when (currentLanguage) {
                 LanguageOption.HINDI -> "hi-IN"
-                LanguageOption.HINGLISH -> "hi-IN"
+                LanguageOption.HINGLISH -> "en-IN"
                 LanguageOption.ENGLISH -> "en-US"
                 LanguageOption.AUTO -> "en-US"
             }
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, langLocale)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, langLocale)
-            if (currentLanguage == LanguageOption.AUTO) {
+            if (currentLanguage == LanguageOption.AUTO || currentLanguage == LanguageOption.HINGLISH) {
                 // Hint additional languages for multilingual Indian & English recognition
-                putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("hi-IN", "en-US"))
+                putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("hi-IN", "en-IN", "en-US"))
             }
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         }

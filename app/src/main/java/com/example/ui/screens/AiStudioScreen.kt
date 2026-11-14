@@ -1,13 +1,21 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentPaste
@@ -29,9 +38,11 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Visibility
@@ -53,9 +64,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import com.example.BuildConfig
 import com.example.model.VoiceGender
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,7 +98,9 @@ import com.example.ui.theme.SiriTextPrimary
 import com.example.ui.theme.SiriTextSecondary
 import com.example.ui.theme.SiriViolet
 import com.example.viewmodel.SiriViewModel
+import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AiStudioScreen(
     viewModel: SiriViewModel,
@@ -105,15 +120,46 @@ fun AiStudioScreen(
     val apiTestResult by viewModel.apiConnectionTestResult.collectAsState()
 
     val voiceGender by viewModel.repository.voiceGender.collectAsState()
+    val activeAssistantName = userPrefs.assistantName.trim().ifBlank { "Siri" }
+    val activeUserAddress = userPrefs.userName.trim().ifBlank { "Friend" }
 
-    var customApiKeyInput by remember(aiConfig.customApiKey) { mutableStateOf(aiConfig.customApiKey) }
-    var customEndpointInput by remember(aiConfig.customEndpoint) { mutableStateOf(aiConfig.customEndpoint) }
-    var selectedProvider by remember(aiConfig.provider) { mutableStateOf(aiConfig.provider) }
-    var selectedModel by remember(aiConfig.model) { mutableStateOf(aiConfig.model) }
-    var selectedTemperature by remember(aiConfig.temperature) { mutableStateOf(aiConfig.temperature) }
+    var assistantNameInput by remember { mutableStateOf(activeAssistantName) }
+    var userAddressInput by remember { mutableStateOf(activeUserAddress) }
+    var identitySavedFeedback by remember { mutableStateOf<String?>(null) }
+
+    var customApiKeyInput by remember { mutableStateOf(aiConfig.customApiKey) }
+    var customEndpointInput by remember { mutableStateOf(aiConfig.customEndpoint) }
+    var selectedProvider by remember { mutableStateOf(aiConfig.provider) }
+    var selectedModel by remember { mutableStateOf(aiConfig.model) }
+    var selectedTemperature by remember { mutableStateOf(aiConfig.temperature) }
     var showApiKeyPassword by remember { mutableStateOf(false) }
 
-    var isForegroundServiceActive by remember { mutableStateOf(SiriVoiceService.isServiceRunning) }
+    LaunchedEffect(userPrefs.assistantName, userPrefs.userName) {
+        if (assistantNameInput != userPrefs.assistantName) assistantNameInput = userPrefs.assistantName
+        if (userAddressInput != userPrefs.userName) userAddressInput = userPrefs.userName
+    }
+
+    LaunchedEffect(aiConfig) {
+        if (customApiKeyInput != aiConfig.customApiKey) customApiKeyInput = aiConfig.customApiKey
+        if (customEndpointInput != aiConfig.customEndpoint) customEndpointInput = aiConfig.customEndpoint
+        if (selectedProvider != aiConfig.provider) selectedProvider = aiConfig.provider
+        if (selectedModel != aiConfig.model) selectedModel = aiConfig.model
+        if (selectedTemperature != aiConfig.temperature) selectedTemperature = aiConfig.temperature
+    }
+
+    val bgMicPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.repository.setBackgroundServiceEnabled(true)
+            SiriVoiceService.start(context)
+        } else {
+            viewModel.repository.setBackgroundServiceEnabled(false)
+            viewModel.emitUiEvent("Microphone permission required to run background voice service.")
+        }
+    }
+
+    val isForegroundServiceActive by com.example.service.SiriServiceBridge.isServiceRunning.collectAsState()
 
     val scrollState = rememberScrollState()
 
@@ -172,6 +218,188 @@ fun AiStudioScreen(
             }
 
             Spacer(modifier = Modifier.height(18.dp))
+
+            // 0. Assistant Identity & Addressing Personalization
+            Text(
+                text = "Assistant Identity & Addressing (नाम और पहचान)",
+                color = SiriTextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = SiriDarkSurfaceVariant),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF28364D))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Assistant Name (Wake Word & Voice Replies)",
+                        color = SiriTextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = assistantNameInput,
+                        onValueChange = {
+                            assistantNameInput = it
+                            identitySavedFeedback = null
+                        },
+                        placeholder = { Text("e.g. Siri, Aria, Nova, Jarvis", color = SiriTextSecondary, fontSize = 12.sp) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("assistant_name_input"),
+                        shape = RoundedCornerShape(12.dp),
+                        leadingIcon = {
+                            Icon(Icons.Default.Badge, contentDescription = "Assistant Name", tint = SiriCyan, modifier = Modifier.size(18.dp))
+                        },
+                        trailingIcon = {
+                            if (assistantNameInput.isNotBlank() && !assistantNameInput.equals("Siri", ignoreCase = true)) {
+                                IconButton(
+                                    onClick = {
+                                        assistantNameInput = "Siri"
+                                        viewModel.updateAssistantIdentity("Siri", userAddressInput)
+                                        identitySavedFeedback = "Reset assistant name to Siri"
+                                    },
+                                    modifier = Modifier.testTag("reset_assistant_name_button")
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Reset to Siri", tint = SiriTextSecondary, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = SiriCyan,
+                            unfocusedBorderColor = Color(0xFF2E3E58),
+                            focusedContainerColor = Color(0xFF121A28),
+                            unfocusedContainerColor = Color(0xFF121A28),
+                            focusedTextColor = SiriTextPrimary,
+                            unfocusedTextColor = SiriTextPrimary
+                        ),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        text = "How Assistant Addresses You (आपको कैसे बुलाएं)",
+                        color = SiriTextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = userAddressInput,
+                        onValueChange = {
+                            userAddressInput = it
+                            identitySavedFeedback = null
+                        },
+                        placeholder = { Text("e.g. Friend, Sir, Boss, Prince, Ji", color = SiriTextSecondary, fontSize = 12.sp) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("user_address_input"),
+                        shape = RoundedCornerShape(12.dp),
+                        leadingIcon = {
+                            Icon(Icons.Default.Person, contentDescription = "Your Preferred Title", tint = SiriMagenta, modifier = Modifier.size(18.dp))
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = SiriMagenta,
+                            unfocusedBorderColor = Color(0xFF2E3E58),
+                            focusedContainerColor = Color(0xFF121A28),
+                            unfocusedContainerColor = Color(0xFF121A28),
+                            focusedTextColor = SiriTextPrimary,
+                            unfocusedTextColor = SiriTextPrimary
+                        ),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        for (preset in listOf("Friend", "Sir", "Ma'am", "Boss", "Buddy")) {
+                            val selected = userAddressInput.trim().equals(preset, ignoreCase = true)
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) SiriMagenta.copy(alpha = 0.25f) else Color(0xFF141E2C),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (selected) SiriMagenta else Color(0xFF28364D)
+                                ),
+                                modifier = Modifier
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .clickable {
+                                        userAddressInput = preset
+                                        viewModel.updateAssistantIdentity(assistantNameInput, preset)
+                                        identitySavedFeedback = "Saved: ${assistantNameInput.trim().ifBlank { "Siri" }} will call you $preset"
+                                    }
+                                    .testTag("address_preset_${preset.lowercase().replace("'", "")}")
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = preset,
+                                        color = if (selected) SiriMagenta else SiriTextSecondary,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = {
+                            val savedAssistant = assistantNameInput.trim().ifBlank { "Siri" }
+                            val savedUser = userAddressInput.trim().ifBlank { "Friend" }
+                            assistantNameInput = savedAssistant
+                            userAddressInput = savedUser
+                            viewModel.updateAssistantIdentity(savedAssistant, savedUser)
+                            identitySavedFeedback = "Saved permanently: '$savedAssistant' calling you '$savedUser'"
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = SiriCyan),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("save_assistant_identity_button")
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF002B33), modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Save Assistant Name & Title", color = Color(0xFF002B33), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+
+                    if (identitySavedFeedback != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = identitySavedFeedback!!,
+                            color = SiriGreen,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Active wake trigger: 'Hey $activeAssistantName' / '$activeAssistantName' / 'Suno $activeAssistantName'. Offline acoustic wake-word adapts cadence detection for custom names.",
+                        color = SiriTextSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
 
             // 1. Voice Gender Selection (Female Siri Voice)
             Text(
@@ -313,7 +541,7 @@ fun AiStudioScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Speech Speed: ${String.format("%.2f", speedMultiplier)}x", color = SiriTextSecondary, fontSize = 12.sp)
+                        Text("Speech Speed: ${String.format(Locale.US, "%.2f", speedMultiplier)}x", color = SiriTextSecondary, fontSize = 12.sp)
                         Text(if (speedMultiplier < 1.0f) "Slower" else if (speedMultiplier > 1.0f) "Faster" else "Normal", color = SiriCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     Slider(
@@ -329,7 +557,7 @@ fun AiStudioScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Voice Pitch: ${String.format("%.2f", pitchMultiplier)}x", color = SiriTextSecondary, fontSize = 12.sp)
+                        Text("Voice Pitch: ${String.format(Locale.US, "%.2f", pitchMultiplier)}x", color = SiriTextSecondary, fontSize = 12.sp)
                         Text(if (pitchMultiplier < 1.0f) "Deeper" else if (pitchMultiplier > 1.0f) "Higher" else "Standard", color = SiriViolet, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     Slider(
@@ -345,14 +573,14 @@ fun AiStudioScreen(
 
             Button(
                 onClick = {
+                    val addrTag = if (activeUserAddress.equals("Friend", ignoreCase = true)) "" else " $activeUserAddress"
                     val testPhrase = when (language) {
-                        LanguageOption.HINDI -> "नमस्ते! मैं सिरी हूँ, आपकी व्यक्तिगत एआई वॉइस असिस्टेंट।"
-                        LanguageOption.HINGLISH -> "Hello! Main Siri hoon, aapka personal AI voice assistant."
-                        LanguageOption.ENGLISH -> "Hello! I am Siri, your personal voice assistant on Android."
-                        LanguageOption.AUTO -> "Hello! I am Siri, ready to assist in English, Hindi, and Hinglish."
+                        LanguageOption.HINDI -> "नमस्ते$addrTag! मैं $activeAssistantName हूँ, आपकी व्यक्तिगत एआई वॉइस असिस्टेंट। बताइए, आज मैं आपकी क्या मदद करूँ?"
+                        LanguageOption.HINGLISH -> "Hello$addrTag! Main $activeAssistantName hoon, aapki personal AI voice assistant. Boliye, aaj kya help karoon?"
+                        LanguageOption.ENGLISH -> "Hey$addrTag! I'm $activeAssistantName, your personal voice assistant on Android. How can I help today?"
+                        LanguageOption.AUTO -> "Hey$addrTag! I'm $activeAssistantName, ready to chat naturally in English, Hindi, and Hinglish."
                     }
-                    viewModel.stopAllSpeech()
-                    viewModel.handleUserUtterance(testPhrase)
+                    viewModel.speakAloud(testPhrase)
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F293D)),
                 shape = RoundedCornerShape(12.dp),
@@ -360,7 +588,7 @@ fun AiStudioScreen(
             ) {
                 Icon(Icons.Default.RecordVoiceOver, contentDescription = null, tint = SiriCyan, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Preview Voice Sample", color = SiriTextPrimary, fontSize = 13.sp)
+                Text("Preview $activeAssistantName Voice Sample", color = SiriTextPrimary, fontSize = 13.sp)
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -675,7 +903,7 @@ fun AiStudioScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Text("Response Creativity: ${String.format("%.1f", selectedTemperature)}", color = SiriTextPrimary, fontSize = 13.sp)
+                    Text("Response Creativity: ${String.format(Locale.US, "%.1f", selectedTemperature)}", color = SiriTextPrimary, fontSize = 13.sp)
                     Slider(
                         value = selectedTemperature,
                         onValueChange = {
@@ -765,10 +993,19 @@ fun AiStudioScreen(
                         Switch(
                             checked = isForegroundServiceActive,
                             onCheckedChange = { enable ->
-                                isForegroundServiceActive = enable
                                 if (enable) {
-                                    SiriVoiceService.start(context)
+                                    val hasMic = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.RECORD_AUDIO
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (hasMic) {
+                                        viewModel.repository.setBackgroundServiceEnabled(true)
+                                        SiriVoiceService.start(context)
+                                    } else {
+                                        bgMicPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
                                 } else {
+                                    viewModel.repository.setBackgroundServiceEnabled(false)
                                     SiriVoiceService.stop(context)
                                 }
                             },
@@ -814,7 +1051,7 @@ fun AiStudioScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Continuous Conversation", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                            Text("Re-arms microphone automatically after Siri speaks", color = SiriTextSecondary, fontSize = 12.sp)
+                            Text("Re-arms microphone automatically after $activeAssistantName speaks", color = SiriTextSecondary, fontSize = 12.sp)
                         }
                         Switch(
                             checked = continuousListening,
@@ -831,7 +1068,7 @@ fun AiStudioScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Wake Word Activation", color = SiriTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                            Text("Recognize 'Hey Siri' / 'Siri' / 'Suno Siri' prefix", color = SiriTextSecondary, fontSize = 12.sp)
+                            Text("Recognize 'Hey $activeAssistantName' / '$activeAssistantName' / 'Suno $activeAssistantName' prefix", color = SiriTextSecondary, fontSize = 12.sp)
                         }
                         Switch(
                             checked = wakeWordEnabled,
@@ -888,7 +1125,7 @@ fun AiStudioScreen(
                     ) {
                         Column {
                             Text("Siri AI Assistant", color = SiriTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text("Installed Version: v${updateInfo.latestVersionName} (Build ${updateInfo.latestVersionCode})", color = SiriTextSecondary, fontSize = 12.sp)
+                            Text("Installed Version: v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})", color = SiriTextSecondary, fontSize = 12.sp)
                         }
                         Surface(
                             color = SiriGreen.copy(alpha = 0.2f),

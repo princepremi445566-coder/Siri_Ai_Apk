@@ -9,6 +9,7 @@ import android.util.Log
 import com.example.BuildConfig
 import com.example.model.AiConfig
 import com.example.model.LanguageOption
+import com.example.model.UserPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -79,19 +80,21 @@ class AiBrainRepository(private val context: Context) {
                     reqBuilder.addHeader("Authorization", "Bearer $apiKey")
                 }
 
-                val response = client.newCall(reqBuilder.build()).execute()
+                val (isOk, respString, code) = client.newCall(reqBuilder.build()).execute().use { response ->
+                    Triple(response.isSuccessful, response.body?.string().orEmpty(), response.code)
+                }
                 val latency = System.currentTimeMillis() - startTime
-                val respString = response.body?.string().orEmpty()
 
-                if (response.isSuccessful) {
+                if (isOk) {
                     Pair(true, "Connected to Custom API ($modelName) in ${latency}ms!")
                 } else {
                     val errorMsg = try {
                         val json = JSONObject(respString)
                         json.optJSONObject("error")?.optString("message", "")
-                            ?: "HTTP ${response.code}: $respString"
+                            ?.takeIf { it.isNotBlank() }
+                            ?: "HTTP $code: $respString"
                     } catch (e: Exception) {
-                        "HTTP ${response.code}"
+                        "HTTP $code"
                     }
                     Pair(false, "Custom API Error ($latency ms): $errorMsg")
                 }
@@ -111,21 +114,24 @@ class AiBrainRepository(private val context: Context) {
 
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder().url(url).post(body).build()
-                val response = client.newCall(request).execute()
+                val (isOk, respString, code) = client.newCall(request).execute().use { response ->
+                    Triple(response.isSuccessful, response.body?.string().orEmpty(), response.code)
+                }
                 val latency = System.currentTimeMillis() - startTime
-                val respString = response.body?.string().orEmpty()
 
-                if (response.isSuccessful) {
+                if (isOk) {
                     Pair(true, "Connected to Gemini (${config.model}) in ${latency}ms!")
                 } else {
                     val errorMsg = try {
                         JSONObject(respString).getJSONObject("error").getString("message")
                     } catch (e: Exception) {
-                        "HTTP ${response.code}: $respString"
+                        "HTTP $code: $respString"
                     }
                     Pair(false, "Gemini Error ($latency ms): $errorMsg")
                 }
             }
+        } catch (e: IllegalArgumentException) {
+            Pair(false, "Invalid endpoint URL. Please check that the URL starts with https:// or http://")
         } catch (e: Exception) {
             Pair(false, "Network error: ${e.localizedMessage ?: "Unknown failure"}")
         }
@@ -139,18 +145,23 @@ class AiBrainRepository(private val context: Context) {
         config: AiConfig,
         language: LanguageOption,
         recentHistory: List<Pair<String, Boolean>> = emptyList(),
-        imageUri: Uri? = null
+        imageUri: Uri? = null,
+        userPrefs: UserPreferences = UserPreferences()
     ): AiGenerationResult = withContext(Dispatchers.IO) {
         val apiKey = getEffectiveApiKey(config)
         val startTime = System.currentTimeMillis()
         val isCustomApi = config.provider == "Custom / OpenAI API" || config.customEndpoint.isNotBlank()
+        val assistantName = userPrefs.assistantName.trim().ifBlank { "Siri" }
+        val userAddress = userPrefs.userName.trim().ifBlank { "Friend" }
 
         if (apiKey.isBlank() && !isCustomApi) {
-            val offlineMsg = when (language) {
-                LanguageOption.HINDI -> "मैं अभी ऑफलाइन मोड में चल रही हूँ क्योंकि कोई API key सेट नहीं है। आप अलार्म, ऐप्स, फ्लैशलाइट, समय और बैटरी जैसी सुविधाएं इस्तेमाल कर सकते हैं, या सेटिंग्स में अपनी API key दर्ज कर सकते हैं।"
-                LanguageOption.HINGLISH -> "Main abhi offline mode mein hoon kyunki API key configured nahi hai. Aap alarms, apps, flashlight, battery aur local tasks use kar sakte hain, ya Settings mein API key add kar sakte hain."
-                LanguageOption.ENGLISH, LanguageOption.AUTO -> "I am running in offline mode because no API key is configured. You can control flashlight, apps, alarms, battery and device tasks, or configure your API key in Settings."
-            }
+            val offlineMsg = buildNaturalOfflineReply(
+                prompt = prompt,
+                language = language,
+                assistantName = assistantName,
+                userAddress = userAddress,
+                recentHistory = recentHistory
+            )
             return@withContext AiGenerationResult(
                 text = offlineMsg,
                 latencyMs = 5L,
@@ -159,20 +170,27 @@ class AiBrainRepository(private val context: Context) {
         }
 
         val langInstruction = when (language) {
-            LanguageOption.HINDI -> "STRICT LANGUAGE REQUIREMENT: You MUST reply entirely in natural, polished Hindi using the Devanagari script (हिन्दी). Do NOT use English or Latin letters. Keep the response conversational, warm, and concise in 1-2 spoken sentences (maximum 3). Never use markdown, asterisks, bullet points, or robotic filler."
-            LanguageOption.HINGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in friendly, conversational everyday Hinglish (natural Hindi-English mix written entirely in the Latin/Roman alphabet, e.g. 'Haan bilkul, maine yeh kar diya hai! Aap aur kuch poochna chahte hain?'). Keep it warm, natural, and concise in 1-2 spoken sentences (maximum 3). Never use markdown, asterisks, or bullet points."
-            LanguageOption.ENGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in fluent, natural English. Keep it conversational, calm, and concise in 1-2 spoken sentences suitable for voice speech. Avoid robotic chatbot clichés and never use markdown, asterisks, or bullet points."
-            LanguageOption.AUTO -> "Detect whether the user is speaking English, Hindi (Devanagari), or Hinglish (Latin alphabet), and reply fluently in that exact matching language style. Keep it conversational and voice-ready in 1-2 sentences without any markdown."
+            LanguageOption.HINDI -> "STRICT LANGUAGE REQUIREMENT: You MUST reply entirely in natural, warm, conversational Hindi using Devanagari script (हिन्दी). Sound friendly and human—avoid stiff textbook Hindi. Keep it crisp in 1-3 spoken sentences with zero markdown or bullet points."
+            LanguageOption.HINGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in natural, friendly everyday Hinglish written entirely in the Latin/Roman alphabet (for example: 'Haan bilkul! Chaliye isse aasan shabdon mein samajhte hain.'). Sound warm and human in 1-3 spoken sentences with zero markdown."
+            LanguageOption.ENGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in warm, fluent, conversational English using natural contractions and human cadence. Keep it concise (1-3 sentences) and voice-ready without markdown or robotic filler."
+            LanguageOption.AUTO -> "Detect whether the user is speaking English, Hindi (Devanagari), or Hinglish (Latin alphabet), and reply naturally in that exact matching style. Keep it warm, human, and voice-ready in 1-3 sentences without markdown."
         }
 
         val currentTimeDate = java.text.SimpleDateFormat("EEEE, MMMM d, yyyy h:mm a", java.util.Locale.getDefault()).format(java.util.Date())
         val lengthInstruction = config.responseLength.instruction
+        val addressRule = if (userAddress.equals("Friend", ignoreCase = true)) {
+            "User addressing: Address the user warmly and naturally (you can occasionally say 'friend' or speak directly without forcing a title)."
+        } else {
+            "User addressing: The user asked to be addressed as '$userAddress'. Address them naturally as '$userAddress' where warm and fitting (do not force it into every single sentence)."
+        }
         val fullSystemPrompt = "${config.systemPrompt}\n" +
+            "Assistant identity: Your name is $assistantName. Always refer to yourself as $assistantName if asked who you are.\n" +
+            "$addressRule\n" +
+            "User context: Home='${userPrefs.homeLocation}', Work='${userPrefs.workLocation}', TempUnit='${userPrefs.preferredTempUnit}'.\n" +
             "Current date and time: $currentTimeDate\n" +
             "Length instruction: $lengthInstruction\n" +
             "Language instruction: $langInstruction\n" +
-            "Conversational continuity: Maintain context across turns. If the user refers to previous items ('it', 'that', 'why?'), resolve them from recent dialogue.\n" +
-            "Assistant name: Siri."
+            "Conversational continuity: Maintain deep context across turns. Understand short follow-ups ('why?', 'tell me more', 'aur batao', 'short mein batao', 'in Hindi', 'what about tomorrow?', 'that'/'it'/'iska') cleanly from the recent dialogue."
 
         try {
             if (isCustomApi) {
@@ -186,17 +204,37 @@ class AiBrainRepository(private val context: Context) {
                         put("role", "system")
                         put("content", fullSystemPrompt)
                     })
-                    val historySlice = recentHistory.takeLast(10)
+                    val historySlice = recentHistory.takeLast(12)
                     for ((text, isUser) in historySlice) {
                         put(JSONObject().apply {
                             put("role", if (isUser) "user" else "assistant")
                             put("content", text)
                         })
                     }
-                    put(JSONObject().apply {
-                        put("role", "user")
-                        put("content", prompt)
-                    })
+                    val base64Img = if (imageUri != null) readImageAsBase64(imageUri) else null
+                    if (base64Img != null) {
+                        val contentParts = JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("type", "text")
+                                put("text", prompt)
+                            })
+                            put(JSONObject().apply {
+                                put("type", "image_url")
+                                put("image_url", JSONObject().apply {
+                                    put("url", "data:image/jpeg;base64,$base64Img")
+                                })
+                            })
+                        }
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", contentParts)
+                        })
+                    } else {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", prompt)
+                        })
+                    }
                 }
 
                 val payload = JSONObject().apply {
@@ -213,15 +251,17 @@ class AiBrainRepository(private val context: Context) {
                     reqBuilder.addHeader("Authorization", "Bearer $apiKey")
                 }
 
-                val response = client.newCall(reqBuilder.build()).execute()
+                val (isOk, respString, code) = client.newCall(reqBuilder.build()).execute().use { response ->
+                    Triple(response.isSuccessful, response.body?.string().orEmpty(), response.code)
+                }
                 val latency = System.currentTimeMillis() - startTime
-                val respString = response.body?.string().orEmpty()
 
-                if (!response.isSuccessful) {
+                if (!isOk) {
                     val errMsg = try {
-                        JSONObject(respString).optJSONObject("error")?.optString("message", "") ?: "HTTP ${response.code}"
+                        JSONObject(respString).optJSONObject("error")?.optString("message", "")
+                            ?.takeIf { it.isNotBlank() } ?: "HTTP $code"
                     } catch (e: Exception) {
-                        "HTTP ${response.code}"
+                        "HTTP $code"
                     }
                     return@withContext AiGenerationResult(
                         text = "Error connecting to Custom API: $errMsg. Local device controls remain active.",
@@ -261,8 +301,8 @@ class AiBrainRepository(private val context: Context) {
                 // Contents array with history
                 val contentsArray = JSONArray()
 
-                // Deep multi-turn context (last 10 messages)
-                val historySlice = recentHistory.takeLast(10)
+                // Deep multi-turn context (last 12 messages)
+                val historySlice = recentHistory.takeLast(12)
                 for ((text, isUser) in historySlice) {
                     val role = if (isUser) "user" else "model"
                     contentsArray.put(JSONObject().apply {
@@ -309,16 +349,17 @@ class AiBrainRepository(private val context: Context) {
                 val body = root.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder().url(url).post(body).build()
 
-                val response = client.newCall(request).execute()
+                val (isOk, respString, code) = client.newCall(request).execute().use { response ->
+                    Triple(response.isSuccessful, response.body?.string().orEmpty(), response.code)
+                }
                 val latency = System.currentTimeMillis() - startTime
-                val respString = response.body?.string().orEmpty()
 
-                if (!response.isSuccessful) {
-                    Log.e("SiriAI", "API Error ${response.code}: $respString")
+                if (!isOk) {
+                    Log.e("SiriAI", "API Error $code: $respString")
                     val errMsg = try {
                         JSONObject(respString).getJSONObject("error").getString("message")
                     } catch (e: Exception) {
-                        "HTTP ${response.code}"
+                        "HTTP $code"
                     }
                     return@withContext AiGenerationResult(
                         text = "I encountered an error connecting to the AI brain: $errMsg. I can still perform local device actions for you.",
@@ -334,16 +375,33 @@ class AiBrainRepository(private val context: Context) {
                     val content = firstCandidate.optJSONObject("content")
                     val parts = content?.optJSONArray("parts")
                     if (parts != null && parts.length() > 0) {
-                        val text = parts.getJSONObject(0).optString("text", "")
-                        return@withContext AiGenerationResult(
-                            text = cleanVoiceText(text),
-                            latencyMs = latency,
-                            isSuccess = true
-                        )
+                        val combinedText = buildString {
+                            for (i in 0 until parts.length()) {
+                                val pObj = parts.optJSONObject(i) ?: continue
+                                if (!pObj.optBoolean("thought", false)) {
+                                    val t = pObj.optString("text", "")
+                                    if (t.isNotBlank()) {
+                                        if (isNotEmpty()) append(' ')
+                                        append(t)
+                                    }
+                                }
+                            }
+                        }
+                        if (combinedText.isNotBlank()) {
+                            return@withContext AiGenerationResult(
+                                text = cleanVoiceText(combinedText),
+                                latencyMs = latency,
+                                isSuccess = true
+                            )
+                        }
                     }
                 }
                 AiGenerationResult("I heard you, but could not generate a response. Please try again.", latency, false)
             }
+        } catch (e: IllegalArgumentException) {
+            val latency = System.currentTimeMillis() - startTime
+            Log.e("SiriAI", "Invalid URL", e)
+            AiGenerationResult("Invalid API endpoint URL. Please check Settings.", latency, false)
         } catch (e: Exception) {
             val latency = System.currentTimeMillis() - startTime
             Log.e("SiriAI", "Generation exception", e)
@@ -353,9 +411,9 @@ class AiBrainRepository(private val context: Context) {
 
     private fun readImageAsBase64(uri: Uri): String? {
         return try {
-            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream.close()
+            val bitmap = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                BitmapFactory.decodeStream(inputStream)
+            } ?: return null
 
             val maxDimension = 1024
             val width = bitmap.width
@@ -366,23 +424,65 @@ class AiBrainRepository(private val context: Context) {
                 val targetH: Int
                 if (width > height) {
                     targetW = maxDimension
-                    targetH = (maxDimension / ratio).toInt()
+                    targetH = (maxDimension / ratio).toInt().coerceAtLeast(1)
                 } else {
                     targetH = maxDimension
-                    targetW = (maxDimension * ratio).toInt()
+                    targetW = (maxDimension * ratio).toInt().coerceAtLeast(1)
                 }
-                Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+                Bitmap.createScaledBitmap(bitmap, targetW, targetH, true).also {
+                    if (it !== bitmap) bitmap.recycle()
+                }
             } else {
                 bitmap
             }
 
-            val outputStream = ByteArrayOutputStream()
-            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-            val bytes = outputStream.toByteArray()
+            val bytes = ByteArrayOutputStream().use { outputStream ->
+                scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                outputStream.toByteArray()
+            }
+            scaledBitmap.recycle()
             Base64.encodeToString(bytes, Base64.NO_WRAP)
         } catch (e: Exception) {
             Log.e("SiriAI", "Failed to encode image to base64", e)
             null
+        }
+    }
+
+    fun buildNaturalOfflineReply(
+        prompt: String,
+        language: LanguageOption,
+        assistantName: String,
+        userAddress: String,
+        recentHistory: List<Pair<String, Boolean>> = emptyList()
+    ): String {
+        val lower = prompt.lowercase(java.util.Locale.ROOT).trim()
+        val hasDevanagari = prompt.any { it in '\u0900'..'\u097F' }
+        val hasHinglish = Regex("""\b(hai|hain|kaise|kya|batao|karo|bhai|yaar|hoon|aap|tum|mera|madad|accha|theek|kyunki|samjho)\b""").containsMatchIn(lower)
+        val effectiveLang = when (language) {
+            LanguageOption.AUTO -> when {
+                hasDevanagari -> LanguageOption.HINDI
+                hasHinglish -> LanguageOption.HINGLISH
+                else -> LanguageOption.ENGLISH
+            }
+            else -> language
+        }
+
+        val nameTag = if (userAddress.equals("Friend", ignoreCase = true)) "" else ", $userAddress"
+        val isFollowUp = Regex("""^(why|how|tell me more|more|explain|aur batao|kyun|kaise|matlab)\b""").containsMatchIn(lower) &&
+            recentHistory.any { !it.second }
+
+        if (isFollowUp) {
+            return when (effectiveLang) {
+                LanguageOption.HINDI -> "$assistantName अभी बिना इंटरनेट AI कुंजी के काम कर रहा है${if (nameTag.isNotEmpty()) ", $userAddress" else ""}। विस्तार से फॉलो-अप जवाब के लिए कृपया सेटिंग्स में अपनी Gemini या OpenAI API कुंजी जोड़ें।"
+                LanguageOption.HINGLISH -> "Main abhi offline mode mein hoon$nameTag, isliye pichle topic par deep AI follow-up ke liye Settings mein API key add karni hogi. Tab tak aap phone commands ya web search pooch sakte hain!"
+                else -> "I'd love to dive deeper into that$nameTag, though I need an API key in Settings to generate full cloud AI follow-ups. In the meantime, I can still run device controls, timers, or web searches."
+            }
+        }
+
+        return when (effectiveLang) {
+            LanguageOption.HINDI -> "मैं $assistantName हूँ${if (nameTag.isNotEmpty()) ", $userAddress" else ""}। अभी लाइव AI जवाब के लिए API कुंजी सेट नहीं है, लेकिन आप मुझसे ऐप्स खोलने, ब्राइटनेस या वॉल्यूम बदलने, अलार्म लगाने और वेब सर्च करने के लिए कह सकते हैं।"
+            LanguageOption.HINGLISH -> "Hey$nameTag, main $assistantName hoon! Abhi cloud AI ke liye API key set nahi hai, par aap Settings mein key add karke mujhse bilkul natural baat kar sakte hain. Abhi ke liye aap apps, settings, alarms ya battery control karwa sakte hain."
+            else -> "Hey$nameTag, I'm $assistantName! Cloud conversation needs an API key in Settings, but I'm right here for opening apps, searching inside apps, setting alarms, or adjusting your device settings."
         }
     }
 

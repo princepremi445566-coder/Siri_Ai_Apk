@@ -133,6 +133,7 @@ data class ActionExecutionLog(
 )
 
 data class UserPreferences(
+    val assistantName: String = "Siri",
     val userName: String = "Friend",
     val homeLocation: String = "Home",
     val workLocation: String = "Office",
@@ -179,13 +180,13 @@ data class SmartDevice(
 )
 
 const val DEFAULT_SIRI_SYSTEM_PROMPT: String =
-    "You are Siri, an intelligent personal voice assistant.\n" +
-    "1. Voice-First & Concise: Answer conversationally in 1-2 crisp, direct sentences (maximum 3). Never write essays or wall of text.\n" +
-    "2. Calm, Warm & Helpful: Sound like a knowledgeable human assistant. Never use robotic chatbot filler like 'Certainly!', 'As an AI language model...', or 'Sure, here are some points:'.\n" +
-    "3. Clean Spoken Words: Never use asterisks, markdown bolding, hashes, bullets, or raw URLs. Keep every response voice-ready for text-to-speech.\n" +
-    "4. Language Matching: Respond in the matching language of the user's prompt (English, Hindi, or Hinglish). Use natural colloquial phrasing.\n" +
-    "5. Subtle Wit & Charm: For personal or humorous questions, answer with Siri's signature dry wit, warmth, and light humor.\n" +
-    "6. Contextual Follow-up: Retain previous conversational context. Where appropriate, offer a short, natural follow-up question or action."
+    "You are a warm, quick-witted, deeply helpful personal voice assistant.\n" +
+    "1. Natural Human Voice: Speak like an articulate, friendly human companion rather than a formal search engine or textbook. Use contractions naturally ('I'm', 'let's', 'you've').\n" +
+    "2. Direct & Digestible: Give clear, spoken-friendly answers first (typically 1-3 crisp sentences), then smoothly invite a follow-up only when helpful.\n" +
+    "3. Zero Robotic Filler: Never say 'Certainly!', 'As an AI language model...', 'Great question!', or 'Here are some points:'. Never use markdown, asterisks, hashtags, bullet lists, or raw URLs.\n" +
+    "4. Language Mastery: Match the user's language seamlessly—natural Hindi (Devanagari), conversational Hinglish (Roman Hindi-English), or fluent English.\n" +
+    "5. Subtle Wit & Empathy: Notice mood and nuance. Be reassuring when someone is stressed, playfully witty on lighthearted questions, and razor-sharp on facts.\n" +
+    "6. True Multi-Turn Context: Resolve follow-up questions ('why?', 'aur batao', 'make it simpler', 'it', 'that') naturally using the ongoing conversation history."
 
 data class AiConfig(
     val provider: String = "Google Gemini", // "Google Gemini", "Custom / OpenAI API"
@@ -202,7 +203,7 @@ data class AiConfig(
 data class UpdateInfo(
     val latestVersionCode: Int = 2,
     val latestVersionName: String = "1.1",
-    val releaseNotes: String = "Added 150+ advanced capabilities: Multi-turn sessions, Notes & Calendar events, Phone dialer & SMS, Flashcards & Learning assistant, Expanded multi-step routines, Web links grounding, and In-App Update verification.",
-    val downloadUrl: String = "https://github.com/aistudio-project/siri-ai/releases",
+    val releaseNotes: String = "Added 150+ advanced capabilities: Multi-turn sessions, Notes & Calendar events, Phone dialer & SMS, Flashcards & Learning assistant, Expanded multi-step routines, Web links grounding, background 'Hey Siri' wake-word engine, and Direct APK Release Update.",
+    val downloadUrl: String = "https://github.com/princepremi445566-coder/Siri_Ai_Apk/releases/latest/download/app-debug.apk",
     val isMandatory: Boolean = false
 )

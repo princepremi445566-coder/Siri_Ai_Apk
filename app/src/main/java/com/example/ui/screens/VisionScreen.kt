@@ -306,8 +306,12 @@ fun VisionScreen(
                         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF28364D)),
                         modifier = Modifier
                             .clickable {
-                                customPrompt = preset
-                                viewModel.handleUserUtterance(preset)
+                                if (selectedImageUri == null) {
+                                    viewModel.emitUiEvent("Please choose a photo first to analyze an image.")
+                                } else {
+                                    customPrompt = ""
+                                    viewModel.handleUserUtterance(preset)
+                                }
                             }
                             .testTag("vision_preset_${preset.take(15).replace(" ", "_").lowercase()}")
                     ) {
@@ -409,7 +413,7 @@ fun VisionScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Button(
-                                onClick = { viewModel.handleUserUtterance(lastSpeech) },
+                                onClick = { viewModel.speakAloud(lastSpeech) },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
                                 shape = RoundedCornerShape(8.dp)
                             ) {

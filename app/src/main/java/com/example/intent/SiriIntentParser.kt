@@ -2,11 +2,13 @@ package com.example.intent
 
 import android.provider.Settings
 import android.view.KeyEvent
+import com.example.ai.EmotionDetector
 import com.example.device.AndroidDeviceController
 import com.example.device.AppLaunchOutcome
 import com.example.device.InAppSearchOutcome
 import com.example.device.InstalledAppInfo
 import com.example.device.SystemControlOutcome
+import com.example.model.AssistantEmotion
 import com.example.model.IntentExecutionResult
 import com.example.model.LanguageOption
 import com.example.model.VoiceGender
@@ -36,8 +38,18 @@ class SiriIntentParser(
     private var lastExecutedIntent: String? = null
     private var lastParameters: Map<String, String> = emptyMap()
     private var pendingAppCandidates: List<InstalledAppInfo> = emptyList()
+    private val lastVariedIndex = HashMap<String, Int>()
 
     fun getLastExecutedIntent(): String? = lastExecutedIntent
+
+    private fun pickVaried(category: String, options: List<String>): String {
+        if (options.isEmpty()) return ""
+        if (options.size == 1) return options[0]
+        val prev = lastVariedIndex[category] ?: -1
+        val next = (prev + 1) % options.size
+        lastVariedIndex[category] = next
+        return options[next]
+    }
 
     private fun assistantName(): String = getAssistantName?.invoke()?.trim()?.ifBlank { "Siri" } ?: "Siri"
 
@@ -359,7 +371,13 @@ class SiriIntentParser(
                     "Why did the smartphone need glasses? Because it lost its contacts!"
                 ).random()
             }
-            val res = IntentExecutionResult("JOKE", emptyMap(), reply, true, "Told a joke")
+            val res = IntentExecutionResult(
+                intentName = "JOKE",
+                feedbackSpeech = reply,
+                success = true,
+                actionSummary = "Told a joke",
+                emotion = AssistantEmotion.HAPPY
+            )
             recordLastIntent(res)
             return res
         }
@@ -368,13 +386,31 @@ class SiriIntentParser(
         if (matchesAny(text, listOf("kya haal hai", "kaise ho", "siri kaise ho", "aap kaise ho", "how are you", "how are you doing", "sab kaisa hai", "how's it going", "what's up"))) {
             val userTag = spokenUserTag()
             val reply = if (isHindiMode(text)) {
-                "मैं बिल्कुल ठीक हूँ$userTag, पूछने के लिए धन्यवाद! बताइए, आज मैं आपकी क्या मदद कर सकती हूँ?"
+                pickVaried("how_hi", listOf(
+                    "मैं बिल्कुल ठीक हूँ$userTag, पूछने के लिए धन्यवाद! बताइए, आज मैं आपकी क्या मदद कर सकती हूँ?",
+                    "बहुत बढ़िया हूँ$userTag! उम्मीद है आपका दिन भी अच्छा जा रहा होगा। बोलिए क्या काम है?",
+                    "एकदम मज़े में हूँ$userTag! बताइए आज किस चीज़ में आपका साथ दूँ?"
+                ))
             } else if (text.contains("kaise") || text.contains("kya haal") || text.contains("sab kaisa") || isHinglishMode(text)) {
-                "Main badhiya hoon$userTag, shukriya! Aap bataiye, aaj main aapki kya madad kar sakti hoon?"
+                pickVaried("how_hg", listOf(
+                    "Main badhiya hoon$userTag, shukriya! Aap bataiye, aaj main aapki kya madad kar sakti hoon?",
+                    "Main badhiya hoon$userTag! Umeed hai aap bhi ache honge. Boliye aaj kya karna hai?",
+                    "Main badhiya hoon$userTag, bas aapki help ke liye ready! Koi kaam ho toh batayein."
+                ))
             } else {
-                "I'm doing great$userTag, thanks for asking! What can I help you tackle today?"
+                pickVaried("how_en", listOf(
+                    "I'm doing great$userTag, thanks for asking! What can I help you tackle today?",
+                    "Feeling energized and ready to help$userTag! How's your day going?",
+                    "Doing really well$userTag! What's on your mind right now?"
+                ))
             }
-            val res = IntentExecutionResult("GREETING", emptyMap(), reply, true, "Conversational Greeting")
+            val res = IntentExecutionResult(
+                intentName = "GREETING",
+                feedbackSpeech = reply,
+                success = true,
+                actionSummary = "Conversational Greeting",
+                emotion = AssistantEmotion.HAPPY
+            )
             recordLastIntent(res)
             return res
         }
@@ -389,13 +425,29 @@ class SiriIntentParser(
                 "are you siri", "are you real siri", "are you ${aName.lowercase(Locale.ROOT)}"
             ))) {
             val reply = if (isHindiMode(text)) {
-                "मैं $aName हूँ$userTag, आपकी स्मार्ट पर्सनल वॉइस असिस्टेंट। मैं बातचीत करने, ऐप्स खोलने और आपके रोज़मर्रा के काम आसान बनाने के लिए हमेशा तैयार हूँ।"
+                pickVaried("id_hi", listOf(
+                    "मैं $aName हूँ$userTag, आपकी स्मार्ट पर्सनल वॉइस असिस्टेंट। मैं बातचीत करने, ऐप्स खोलने और आपके रोज़मर्रा के काम आसान बनाने के लिए हमेशा तैयार हूँ।",
+                    "मेरा नाम $aName है$userTag! मैं आपकी पर्सनल AI साथी हूँ—चाहे कोई ऐप खोलना हो या कोई सवाल पूछना हो, बस बोल दीजिए।"
+                ))
             } else if (text.contains("tum") || text.contains("aapka") || text.contains("kisne") || isHinglishMode(text)) {
-                "Main $aName hoon$userTag, aapki personal AI voice assistant. Main aapse natural baat kar sakti hoon aur aapke phone ke kaam aasan bana sakti hoon."
+                pickVaried("id_hg", listOf(
+                    "Main $aName hoon$userTag, aapki personal AI voice assistant. Main aapse natural baat kar sakti hoon aur aapke phone ke kaam aasan bana sakti hoon.",
+                    "Mera naam $aName hai$userTag! Main aapki smart voice companion hoon, apps kholne se lekar sawaalon ke jawab dene tak sab mein madad karne ke liye."
+                ))
             } else {
-                "I'm $aName$userTag—your personal AI voice assistant, here to chat naturally and help you get things done calmly and quickly."
+                pickVaried("id_en", listOf(
+                    "I'm $aName$userTag—your personal AI voice assistant, here to chat naturally and help you get things done calmly and quickly.",
+                    "I'm $aName$userTag, your voice companion on Android. Ask me to open apps, search, control settings, or just talk things through."
+                ))
             }
-            val res = IntentExecutionResult("IDENTITY", mapOf("assistantName" to aName), reply, true, "Identity Response")
+            val res = IntentExecutionResult(
+                intentName = "IDENTITY",
+                parameters = mapOf("assistantName" to aName),
+                feedbackSpeech = reply,
+                success = true,
+                actionSummary = "Identity Response",
+                emotion = AssistantEmotion.HAPPY
+            )
             recordLastIntent(res)
             return res
         }
@@ -411,7 +463,7 @@ class SiriIntentParser(
                 hinglish = if (uAddr.equals("Friend", ignoreCase = true)) "Abhi koi custom naam set nahi hai, toh main aapko Friend bulati hoon. Aap Settings mein apna pasandida naam save kar sakte hain." else "Main aapko $uAddr bulati hoon! Aap Settings se jab chahein ise change kar sakte hain.",
                 english = if (uAddr.equals("Friend", ignoreCase = true)) "You haven't set a custom title yet, so I just call you Friend. You can customize how I address you anytime in Settings." else "You asked me to call you $uAddr! You can update that anytime in Settings."
             )
-            val res = IntentExecutionResult("USER_IDENTITY", mapOf("userAddress" to uAddr), reply, true, "User Addressing")
+            val res = IntentExecutionResult("USER_IDENTITY", mapOf("userAddress" to uAddr), reply, true, "User Addressing", emotion = AssistantEmotion.HAPPY)
             recordLastIntent(res)
             return res
         }
@@ -428,7 +480,7 @@ class SiriIntentParser(
             } else {
                 "I can toggle flashlight and system controls, launch or search inside your apps, set alarms and notes, and have natural multi-turn conversations. What can I help with$userTag?"
             }
-            val res = IntentExecutionResult("CAPABILITIES", emptyMap(), reply, true, "Assistance Capabilities")
+            val res = IntentExecutionResult("CAPABILITIES", emptyMap(), reply, true, "Assistance Capabilities", emotion = AssistantEmotion.EXCITED)
             recordLastIntent(res)
             return res
         }
@@ -442,7 +494,7 @@ class SiriIntentParser(
             } else {
                 "That's sweet of you$userTag, though my heart runs purely on code. I'm always happy to be your loyal sidekick!"
             }
-            val res = IntentExecutionResult("PLAYFUL", emptyMap(), reply, true, "Playful Response")
+            val res = IntentExecutionResult("PLAYFUL", emptyMap(), reply, true, "Playful Response", emotion = AssistantEmotion.SURPRISED)
             recordLastIntent(res)
             return res
         }
@@ -453,7 +505,7 @@ class SiriIntentParser(
             } else {
                 "Some say it's 42, though I'd bet on curiosity, good company, and a really great cup of chai."
             }
-            val res = IntentExecutionResult("PHILOSOPHICAL", emptyMap(), reply, true, "Meaning of Life")
+            val res = IntentExecutionResult("PHILOSOPHICAL", emptyMap(), reply, true, "Meaning of Life", emotion = AssistantEmotion.CURIOUS)
             recordLastIntent(res)
             return res
         }
@@ -464,32 +516,61 @@ class SiriIntentParser(
             } else {
                 "Smart enough to keep your day running smoothly$userTag, and humble enough to look things up whenever you surprise me."
             }
-            val res = IntentExecutionResult("PLAYFUL", emptyMap(), reply, true, "Intelligence Response")
+            val res = IntentExecutionResult("PLAYFUL", emptyMap(), reply, true, "Intelligence Response", emotion = AssistantEmotion.HAPPY)
             recordLastIntent(res)
             return res
         }
 
         // Standard Greetings
         if (matchesAny(text, listOf("namaste", "hello", "hi", "hey", "good morning", "good evening", "good afternoon", "shubh prabhat", "shubh ratri", "good night"))) {
+            val isNight = text.contains("good night") || text.contains("shubh ratri")
             val reply = when {
                 text.contains("good morning") || text.contains("shubh prabhat") -> {
-                    if (isHindiMode(text)) "शुभ प्रभात$userTag! आज का दिन आपके लिए शानदार और सफल हो।"
-                    else if (isHinglishMode(text)) "Good morning$userTag! Aapka din shandaar rahe. Aaj kya plan hai?"
-                    else "Good morning$userTag! Hope you're feeling refreshed. How can I kick off your day?"
+                    if (isHindiMode(text)) pickVaried("gm_hi", listOf(
+                        "शुभ प्रभात$userTag! आज का दिन आपके लिए शानदार और सफल हो।",
+                        "सुप्रभात$userTag! बताइए आज की सुबह कैसे शुरू करें?"
+                    ))
+                    else if (isHinglishMode(text)) pickVaried("gm_hg", listOf(
+                        "Good morning$userTag! Aapka din shandaar rahe. Aaj kya plan hai?",
+                        "Subah bakhair$userTag! Naya din aur nayi energy—batayein kya help karoon?"
+                    ))
+                    else pickVaried("gm_en", listOf(
+                        "Good morning$userTag! Hope you're feeling refreshed. How can I kick off your day?",
+                        "Morning$userTag! Ready when you are—what's first on your list today?"
+                    ))
                 }
-                text.contains("good night") || text.contains("shubh ratri") -> {
+                isNight -> {
                     if (isHindiMode(text)) "शुभ रात्रि$userTag! आराम से सोइए, सुबह मैं यहीं मिलूँगी।"
                     else if (isHinglishMode(text)) "Good night$userTag! Aaram se soiye, subah jab zaroorat ho bas awaz de dijiyega."
                     else "Good night$userTag! Sleep well, and just call $aName whenever you need me tomorrow."
                 }
                 text.contains("namaste") || isHindiMode(text) -> {
-                    if (isHindiMode(text)) "नमस्ते$userTag! मैं $aName हूँ, बताइए आपकी क्या सहायता कर सकती हूँ?"
-                    else "Namaste$userTag! Main $aName hoon, aaj main aapki kya madad kar sakti hoon?"
+                    if (isHindiMode(text)) pickVaried("hi_nam", listOf(
+                        "नमस्ते$userTag! मैं $aName हूँ, बताइए आपकी क्या सहायता कर सकती हूँ?",
+                        "नमस्ते$userTag! कहिए, आज मैं आपके लिए क्या कर सकती हूँ?"
+                    ))
+                    else pickVaried("hg_nam", listOf(
+                        "Namaste$userTag! Main $aName hoon, aaj main aapki kya madad kar sakti hoon?",
+                        "Namaste$userTag! Boliye, kya haal chaal aur kya kaam hai?"
+                    ))
                 }
-                isHinglishMode(text) -> "Hello$userTag! Main $aName hoon. Boliye, aaj main aapki kya help kar sakti hoon?"
-                else -> "Hey$userTag! I'm $aName, always happy to help. What's on your mind?"
+                isHinglishMode(text) -> pickVaried("hg_hi", listOf(
+                    "Hello$userTag! Main $aName hoon. Boliye, aaj main aapki kya help kar sakti hoon?",
+                    "Hi$userTag! Main $aName hoon—batayein aaj kis cheez mein madad chahiye?"
+                ))
+                else -> pickVaried("en_hi", listOf(
+                    "Hey$userTag! I'm $aName, always happy to help. What's on your mind?",
+                    "Hi there$userTag! Good to hear from you—what can we get done?",
+                    "Hello$userTag! Tell me what you need and I'm on it."
+                ))
             }
-            val res = IntentExecutionResult("GREETING", emptyMap(), reply, true, "Greeting")
+            val res = IntentExecutionResult(
+                intentName = "GREETING",
+                feedbackSpeech = reply,
+                success = true,
+                actionSummary = "Greeting",
+                emotion = if (isNight) AssistantEmotion.NEUTRAL else AssistantEmotion.HAPPY
+            )
             recordLastIntent(res)
             return res
         }
@@ -497,13 +578,22 @@ class SiriIntentParser(
         // Courtesy
         if (matchesAny(text, listOf("thank you", "thanks", "dhanyawad", "shukriya", "bahut accha", "you are great", "tum bohot achi ho"))) {
             val reply = if (isHindiMode(text)) {
-                "आपका बहुत स्वागत है$userTag! जब भी ज़रूरत हो, बस बुला लीजिएगा।"
+                pickVaried("thx_hi", listOf(
+                    "आपका बहुत स्वागत है$userTag! जब भी ज़रूरत हो, बस बुला लीजिएगा।",
+                    "कोई बात नहीं$userTag! आपकी मदद करके हमेशा खुशी होती है।"
+                ))
             } else if (text.contains("dhanyawad") || text.contains("shukriya") || text.contains("achi") || text.contains("accha") || isHinglishMode(text)) {
-                "Aapka swagat hai$userTag! Jab bhi madad chahiye, bas $aName ko awaz de dijiyega."
+                pickVaried("thx_hg", listOf(
+                    "Aapka swagat hai$userTag! Jab bhi madad chahiye, bas $aName ko awaz de dijiyega.",
+                    "Arre koi baat nahi$userTag! Hamesha hazir hoon aapki help ke liye."
+                ))
             } else {
-                "You're very welcome$userTag! Anytime you need a hand, I'm right here."
+                pickVaried("thx_en", listOf(
+                    "You're very welcome$userTag! Anytime you need a hand, I'm right here.",
+                    "Happy to help$userTag! Just give me a shout whenever you need something."
+                ))
             }
-            val res = IntentExecutionResult("COURTESY", emptyMap(), reply, true, "Courtesy Response")
+            val res = IntentExecutionResult("COURTESY", emptyMap(), reply, true, "Courtesy Response", emotion = AssistantEmotion.HAPPY)
             recordLastIntent(res)
             return res
         }
@@ -897,14 +987,15 @@ class SiriIntentParser(
         }
 
         // 21. Smart Open Installed Application (supports prefix + Hindi/Hinglish postfix & ambiguity clarification)
+        val trimmedCmd = originalText.trim().trimEnd('?', '!', '.', ' ')
         val openPrefixMatch = Regex(
-            """^(?:please\s+|can\s+you\s+)?(?:open|launch|start|run|kholo|chalu\s+karo)\s+(?:the\s+)?([a-zA-Z\u0900-\u097F0-9\s.'&_-]+?)(?:\s+app)?$""",
+            """^(?:please\s+|can\s+you\s+|could\s+you\s+|zara\s+|mujhe\s+|bhai\s+|yaar\s+|mere\s+liye\s+|कृपया\s+|ज़रा\s+)?(?:open|launch|start|run|kholo|khol\s+do|khol\s+de|open\s+karo|open\s+kardo|open\s+kar\s+do|chalu\s+karo|chalu\s+kardo|chalao|chala\s+do|खोलो|खोल\s+दो|खोल\s+दें|ओपन\s+करो|ओपन\s+कर\s+दो|चालू\s+करो|चलाओ|चला\s+दो)\s+(?:the\s+|app\s+|ऐप\s+)?([a-zA-Z\u0900-\u097F0-9\s.'&_-]+?)(?:\s+(?:app|ऐप|ko|को|please|plz))*$""",
             RegexOption.IGNORE_CASE
-        ).find(originalText.trimEnd('?', '!', '.', ' '))
+        ).find(trimmedCmd)
         val openPostfixMatch = Regex(
-            """^([a-zA-Z\u0900-\u097F0-9\s.'&_-]+?)(?:\s+app)?\s+(?:kholo|khol\s+do|open\s+karo|open\s+kardo|open\s+kar\s+do|launch\s+karo|start\s+karo|chalu\s+karo|खोलो|ओपन\s+करो)$""",
+            """^(?:zara\s+|mujhe\s+|please\s+|bhai\s+|ज़रा\s+)?([a-zA-Z\u0900-\u097F0-9\s.'&_-]+?)(?:\s+(?:app|ऐप|ko|को))*?\s+(?:kholo|khol\s+do|khol\s+de|kholna\s+hai|open\s+karo|open\s+kardo|open\s+kar\s+do|open\s+karke\s+do|launch\s+karo|start\s+karo|chalu\s+karo|chalu\s+kardo|chalu\s+kar\s+do|chalao|chala\s+do|खोलो|खोल\s+दो|खोल\s+दें|खोलना\s+है|ओपन\s+करो|ओपन\s+कर\s+दो|चालू\s+करो|चलाओ|चला\s+दो)(?:\s+(?:please|plz|bhai|यार))?$""",
             RegexOption.IGNORE_CASE
-        ).find(originalText.trimEnd('?', '!', '.', ' '))
+        ).find(trimmedCmd)
 
         val appTargetRaw = (openPrefixMatch ?: openPostfixMatch)?.groupValues?.get(1)?.trim()
         if (!appTargetRaw.isNullOrBlank()) {
@@ -1435,16 +1526,27 @@ class SiriIntentParser(
             is AppLaunchOutcome.Launched -> {
                 val speech = localized(
                     text,
-                    "${outcome.appLabel} खोल रही हूँ।",
-                    "${outcome.appLabel} open kar rahi hoon.",
-                    "Opening ${outcome.appLabel}."
+                    pickVaried("app_hi", listOf(
+                        "${outcome.appLabel} खोल रही हूँ।",
+                        "${outcome.appLabel} अभी खोलती हूँ।"
+                    )),
+                    pickVaried("app_hg", listOf(
+                        "${outcome.appLabel} open kar rahi hoon.",
+                        "Zaroor, ${outcome.appLabel} abhi khol rahi hoon."
+                    )),
+                    pickVaried("app_en", listOf(
+                        "Opening ${outcome.appLabel}.",
+                        "Launching ${outcome.appLabel} for you.",
+                        "Here's ${outcome.appLabel}."
+                    ))
                 )
                 IntentExecutionResult(
                     intentName = "OPEN_APP",
                     parameters = mapOf("app" to outcome.appLabel, "package" to outcome.packageName),
                     feedbackSpeech = speech,
                     success = true,
-                    actionSummary = "Opened ${outcome.appLabel}"
+                    actionSummary = "Opened ${outcome.appLabel}",
+                    emotion = AssistantEmotion.HAPPY
                 )
             }
             is AppLaunchOutcome.OpenedUrl -> {
@@ -1454,7 +1556,8 @@ class SiriIntentParser(
                     parameters = mapOf("url" to outcome.url),
                     feedbackSpeech = speech,
                     success = true,
-                    actionSummary = "Opened link"
+                    actionSummary = "Opened link",
+                    emotion = AssistantEmotion.NEUTRAL
                 )
             }
             is AppLaunchOutcome.Ambiguous -> {
@@ -1471,7 +1574,8 @@ class SiriIntentParser(
                     parameters = mapOf("query" to outcome.requestedName, "candidates" to candidateNames),
                     feedbackSpeech = speech,
                     success = true,
-                    actionSummary = "Clarifying app: $candidateNames"
+                    actionSummary = "Clarifying app: $candidateNames",
+                    emotion = AssistantEmotion.CURIOUS
                 )
             }
             is AppLaunchOutcome.NotInstalled -> {
@@ -1486,11 +1590,19 @@ class SiriIntentParser(
                     parameters = mapOf("app" to outcome.requestedName),
                     feedbackSpeech = speech,
                     success = false,
-                    actionSummary = "${outcome.requestedName} not installed"
+                    actionSummary = "${outcome.requestedName} not installed",
+                    emotion = AssistantEmotion.SAD
                 )
             }
             is AppLaunchOutcome.Failed -> {
-                IntentExecutionResult("OPEN_APP", mapOf("app" to appTarget), outcome.reason, false, "Open App Failed")
+                IntentExecutionResult(
+                    intentName = "OPEN_APP",
+                    parameters = mapOf("app" to appTarget),
+                    feedbackSpeech = outcome.reason,
+                    success = false,
+                    actionSummary = "Open App Failed",
+                    emotion = AssistantEmotion.SAD
+                )
             }
         }
     }

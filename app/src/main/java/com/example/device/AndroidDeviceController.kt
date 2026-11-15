@@ -23,9 +23,12 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import java.util.Locale
 
+import android.content.ComponentName
+
 data class InstalledAppInfo(
     val label: String,
-    val packageName: String
+    val packageName: String,
+    val activityClassName: String? = null
 )
 
 sealed class AppLaunchOutcome {
@@ -75,43 +78,65 @@ class AndroidDeviceController(
             KnownAppSpec(
                 key = "whatsapp",
                 displayName = "WhatsApp",
-                aliases = listOf("whatsapp", "whats app", "what's app", "watsapp", "व्हाट्सएप", "व्हाट्सऐप"),
+                aliases = listOf(
+                    "whatsapp", "whats app", "what's app", "what's up", "whats up",
+                    "watsapp", "watsup", "whatsap", "whatsapp messenger", "wa",
+                    "व्हाट्सएप", "व्हाट्सऐप", "वाट्सएप", "वाट्सअप", "व्हाट्सअप", "वटसप"
+                ),
                 packages = listOf("com.whatsapp", "com.whatsapp.w4b")
             ),
             KnownAppSpec(
                 key = "facebook",
                 displayName = "Facebook",
-                aliases = listOf("facebook", "fb", "फेसबुक"),
+                aliases = listOf(
+                    "facebook", "face book", "fb", "facebook lite", "fb lite",
+                    "फेसबुक", "फेस बुक", "एफबी"
+                ),
                 packages = listOf("com.facebook.katana", "com.facebook.lite")
             ),
             KnownAppSpec(
                 key = "instagram",
                 displayName = "Instagram",
-                aliases = listOf("instagram", "insta", "ig", "इंस्टाग्राम"),
-                packages = listOf("com.instagram.android")
+                aliases = listOf(
+                    "instagram", "insta", "insta gram", "ig", "instagram lite",
+                    "इंस्टाग्राम", "इंस्टा", "इंस्टाग्राम ऐप"
+                ),
+                packages = listOf("com.instagram.android", "com.instagram.lite")
+            ),
+            KnownAppSpec(
+                key = "youtube_music",
+                displayName = "YouTube Music",
+                aliases = listOf("youtube music", "yt music", "यूट्यूब म्यूजिक"),
+                packages = listOf("com.google.android.apps.youtube.music")
             ),
             KnownAppSpec(
                 key = "youtube",
                 displayName = "YouTube",
-                aliases = listOf("youtube", "yt", "you tube", "यूट्यूब"),
+                aliases = listOf(
+                    "youtube", "yt", "you tube", "u tube", "utube",
+                    "यूट्यूब", "यू ट्यूब", "युट्युब", "यूटुब"
+                ),
                 packages = listOf("com.google.android.youtube")
             ),
             KnownAppSpec(
                 key = "google",
                 displayName = "Google",
-                aliases = listOf("google", "google app", "google search", "गूगल"),
+                aliases = listOf("google", "google app", "google search", "गूगल", "गूगल ऐप"),
                 packages = listOf("com.google.android.googlequicksearchbox")
             ),
             KnownAppSpec(
                 key = "chrome",
                 displayName = "Chrome",
-                aliases = listOf("chrome", "google chrome", "क्रोम"),
-                packages = listOf("com.android.chrome")
+                aliases = listOf(
+                    "chrome", "google chrome", "chrome browser", "browser",
+                    "क्रोम", "गूगल क्रोम", "क्रोम ब्राउज़र"
+                ),
+                packages = listOf("com.android.chrome", "com.chrome.beta", "com.chrome.dev")
             ),
             KnownAppSpec(
                 key = "gmail",
                 displayName = "Gmail",
-                aliases = listOf("gmail", "google mail", "g mail", "जीमेल"),
+                aliases = listOf("gmail", "google mail", "g mail", "email app", "जीमेल"),
                 packages = listOf("com.google.android.gm")
             ),
             KnownAppSpec(
@@ -123,26 +148,32 @@ class AndroidDeviceController(
             KnownAppSpec(
                 key = "telegram",
                 displayName = "Telegram",
-                aliases = listOf("telegram", "टेलीग्राम"),
+                aliases = listOf("telegram", "tele gram", "टेलीग्राम", "टेलीग्राम ऐप"),
                 packages = listOf("org.telegram.messenger", "org.telegram.plus", "org.thunderdog.challegram")
             ),
             KnownAppSpec(
                 key = "spotify",
                 displayName = "Spotify",
-                aliases = listOf("spotify", "स्पॉटिफाई"),
+                aliases = listOf("spotify", "spotify music", "स्पॉटिफाई", "स्पॉटिफ़ाई"),
                 packages = listOf("com.spotify.music", "com.spotify.lite")
             ),
             KnownAppSpec(
                 key = "snapchat",
                 displayName = "Snapchat",
-                aliases = listOf("snapchat", "snap", "स्नैपचैट"),
+                aliases = listOf("snapchat", "snap chat", "snap", "स्नैपचैट"),
                 packages = listOf("com.snapchat.android")
             ),
             KnownAppSpec(
                 key = "phone",
                 displayName = "Phone",
-                aliases = listOf("phone", "dialer", "phone app", "call app", "फोन", "डायलर"),
-                packages = listOf("com.google.android.dialer", "com.android.dialer", "com.samsung.android.dialer"),
+                aliases = listOf("phone", "dialer", "phone app", "call app", "फोन", "फ़ोन", "डायलर"),
+                packages = listOf(
+                    "com.google.android.dialer",
+                    "com.android.dialer",
+                    "com.samsung.android.dialer",
+                    "com.oneplus.dialer",
+                    "com.android.contacts"
+                ),
                 systemLauncherFallback = { openPhoneApp() }
             ),
             KnownAppSpec(
@@ -163,7 +194,14 @@ class AndroidDeviceController(
                 key = "gallery",
                 displayName = "Gallery",
                 aliases = listOf("gallery", "photos", "google photos", "गैलरी", "फोटो", "तस्वीरें"),
-                packages = listOf("com.google.android.apps.photos", "com.android.gallery3d", "com.sec.android.gallery3d", "com.miui.gallery"),
+                packages = listOf(
+                    "com.google.android.apps.photos",
+                    "com.android.gallery3d",
+                    "com.sec.android.gallery3d",
+                    "com.miui.gallery",
+                    "com.oneplus.gallery",
+                    "com.coloros.gallery3d"
+                ),
                 systemLauncherFallback = { openGalleryApp() }
             ),
             KnownAppSpec(
@@ -182,8 +220,14 @@ class AndroidDeviceController(
             KnownAppSpec(
                 key = "calculator",
                 displayName = "Calculator",
-                aliases = listOf("calculator", "calc", "कैल्कुलेटर"),
-                packages = listOf("com.google.android.calculator", "com.android.calculator2", "com.sec.android.app.popupcalculator"),
+                aliases = listOf("calculator", "calc", "कैल्कुलेटर", "कैलकुलेटर"),
+                packages = listOf(
+                    "com.google.android.calculator",
+                    "com.android.calculator2",
+                    "com.sec.android.app.popupcalculator",
+                    "com.miui.calculator",
+                    "com.oneplus.calculator"
+                ),
                 systemLauncherFallback = { openCalculatorApp() }
             ),
             KnownAppSpec(
@@ -223,17 +267,17 @@ class AndroidDeviceController(
     fun isFlashlightActive(): Boolean = isTorchOn
 
     /**
-     * Discovers all user-launchable applications installed on the device.
+     * Discovers all user-launchable applications installed on the device using MATCH_ALL where available.
      */
     fun discoverInstalledApps(): List<InstalledAppInfo> {
         val pm = context.packageManager
         val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val resolved = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(0L))
+                pm.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()))
             } else {
                 @Suppress("DEPRECATION")
-                pm.queryIntentActivities(launcherIntent, 0)
+                pm.queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
             }
         } catch (_: Exception) {
             emptyList()
@@ -250,7 +294,11 @@ class AndroidDeviceController(
                 pkg
             }.ifBlank { pkg }
             if (!seenPackages.containsKey(pkg)) {
-                seenPackages[pkg] = InstalledAppInfo(label = label, packageName = pkg)
+                seenPackages[pkg] = InstalledAppInfo(
+                    label = label,
+                    packageName = pkg,
+                    activityClassName = activityInfo.name
+                )
             }
         }
         return seenPackages.values.toList()
@@ -266,33 +314,105 @@ class AndroidDeviceController(
             }
             true
         } catch (_: Exception) {
-            context.packageManager.getLaunchIntentForPackage(packageName) != null
+            resolveLaunchIntent(packageName, null) != null
         }
     }
 
     fun launchInstalledApp(app: InstalledAppInfo): AppLaunchOutcome {
-        return launchPackageInternal(app.packageName, app.label)
+        return launchPackageInternal(app.packageName, app.label, app.activityClassName)
     }
 
-    private fun launchPackageInternal(packageName: String, displayLabel: String): AppLaunchOutcome {
-        val launchIntent = try {
-            context.packageManager.getLaunchIntentForPackage(packageName)
+    private fun resolveLaunchIntent(packageName: String, fallbackActivityName: String?): Intent? {
+        val pm = context.packageManager
+        val direct = try {
+            pm.getLaunchIntentForPackage(packageName)
         } catch (_: Exception) {
             null
-        } ?: return AppLaunchOutcome.NotInstalled(displayLabel)
+        }
+        if (direct != null) return direct
+
+        // Fallback 1: Explicit ACTION_MAIN + CATEGORY_LAUNCHER query for this package
+        val targeted = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            setPackage(packageName)
+        }
+        val matches = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(targeted, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong()))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(targeted, PackageManager.MATCH_DEFAULT_ONLY)
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val firstActivity = matches.firstOrNull()?.activityInfo
+        if (firstActivity != null && !firstActivity.name.isNullOrBlank()) {
+            return Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                component = ComponentName(packageName, firstActivity.name)
+            }
+        }
+
+        // Fallback 2: Use previously discovered activity component if present
+        if (!fallbackActivityName.isNullOrBlank()) {
+            return Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                component = ComponentName(packageName, fallbackActivityName)
+            }
+        }
+        return null
+    }
+
+    private fun launchPackageInternal(
+        packageName: String,
+        displayLabel: String,
+        fallbackActivityName: String? = null
+    ): AppLaunchOutcome {
+        val launchIntent = resolveLaunchIntent(packageName, fallbackActivityName)
+            ?: return AppLaunchOutcome.NotInstalled(displayLabel)
+
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+
+        // Verify resolved component actually exists on this device before declaring success
+        val pm = context.packageManager
+        val resolved = try {
+            launchIntent.resolveActivity(pm)
+        } catch (_: Exception) {
+            null
+        }
+        if (resolved == null && launchIntent.component == null) {
+            return AppLaunchOutcome.NotInstalled(displayLabel)
+        }
 
         return try {
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launchIntent)
-            AppLaunchOutcome.Launched(displayLabel, packageName)
+            val resolvedLabel = try {
+                val appInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    pm.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.getApplicationInfo(packageName, 0)
+                }
+                pm.getApplicationLabel(appInfo).toString().trim().ifBlank { displayLabel }
+            } catch (_: Exception) {
+                displayLabel
+            }
+            Log.d("SiriDevice", "Verified app launch: $resolvedLabel ($packageName)")
+            AppLaunchOutcome.Launched(resolvedLabel, packageName)
+        } catch (e: SecurityException) {
+            Log.e("SiriDevice", "SecurityException launching $packageName", e)
+            AppLaunchOutcome.Failed("$displayLabel blocked the launch request due to app permissions.")
         } catch (e: Exception) {
+            Log.e("SiriDevice", "Launch failed for $packageName", e)
             AppLaunchOutcome.Failed("Could not open $displayLabel: ${e.localizedMessage ?: "launch error"}")
         }
     }
 
     /**
-     * Smart app launcher supporting all 17 popular apps, any dynamically installed app,
-     * bilingual aliases, duplicate/similar name disambiguation, and honest not-installed handling.
+     * Smart app launcher supporting all 17+ popular apps, any dynamically installed app,
+     * bilingual Hindi/Hinglish/English aliases, ASR phonetic typo resilience, disambiguation,
+     * and verified launch confirmation.
      */
     fun openAppSmart(target: String): AppLaunchOutcome {
         val trimmedTarget = target.trim()
@@ -316,31 +436,25 @@ class AndroidDeviceController(
             return AppLaunchOutcome.Ambiguous(trimmedTarget, exactLabelMatches.take(4))
         }
 
-        // 2. Partial/fuzzy matches among dynamically installed apps when user says a generic or shared word
-        val fuzzyMatches = findMatchingInstalledApps(cleanedQuery, installedApps)
-
-        // 3. Check curated popular apps & system apps
+        // 2. Curated popular apps & phonetic/Hindi/Hinglish aliases (checked early so "what's up" -> WhatsApp works!)
         val knownSpec = findKnownAppSpec(cleanedQuery)
         if (knownSpec != null) {
-            // If multiple installed apps match an ambiguous short alias (e.g. "fb" or "mail" or "messages")
-            // check first if a primary known package is explicitly installed
             for (pkg in knownSpec.packages) {
                 val installedMatch = installedApps.firstOrNull { it.packageName == pkg }
                 if (installedMatch != null) {
                     return launchInstalledApp(installedMatch)
                 }
-                if (context.packageManager.getLaunchIntentForPackage(pkg) != null) {
+                if (resolveLaunchIntent(pkg, null) != null) {
                     return launchPackageInternal(pkg, knownSpec.displayName)
                 }
             }
-            // Check fuzzy installed matches before falling back to system implicit intent
-            if (fuzzyMatches.size == 1) {
-                return launchInstalledApp(fuzzyMatches.first())
+            val fuzzyForKnown = findMatchingInstalledApps(normalizeLabel(knownSpec.displayName), installedApps)
+            if (fuzzyForKnown.size == 1) {
+                return launchInstalledApp(fuzzyForKnown.first())
             }
-            if (fuzzyMatches.size > 1) {
-                return AppLaunchOutcome.Ambiguous(trimmedTarget, fuzzyMatches.take(4))
+            if (fuzzyForKnown.size > 1) {
+                return AppLaunchOutcome.Ambiguous(trimmedTarget, fuzzyForKnown.take(4))
             }
-            // Try system action fallback (e.g., Camera, Dialer, Messages, Gallery, Settings, Clock)
             knownSpec.systemLauncherFallback?.let { fallback ->
                 val (ok, msg) = fallback()
                 if (ok) {
@@ -351,14 +465,15 @@ class AndroidDeviceController(
             return AppLaunchOutcome.NotInstalled(knownSpec.displayName)
         }
 
-        // 4. Direct package name lookup
+        // 3. Direct package name lookup
         if (trimmedTarget.contains('.') && !trimmedTarget.contains(' ')) {
-            if (context.packageManager.getLaunchIntentForPackage(trimmedTarget) != null) {
+            if (resolveLaunchIntent(trimmedTarget, null) != null) {
                 return launchPackageInternal(trimmedTarget, trimmedTarget)
             }
         }
 
-        // 5. Dynamic installed app fuzzy matching
+        // 4. Dynamic installed app fuzzy & typo-tolerant matching
+        val fuzzyMatches = findMatchingInstalledApps(cleanedQuery, installedApps)
         return when {
             fuzzyMatches.size == 1 -> launchInstalledApp(fuzzyMatches.first())
             fuzzyMatches.size > 1 -> AppLaunchOutcome.Ambiguous(trimmedTarget, fuzzyMatches.take(4))
@@ -1353,27 +1468,39 @@ class AndroidDeviceController(
 
     private fun normalizeAppQuery(raw: String): String {
         return raw.lowercase(Locale.ROOT)
-            .replace(Regex("""^(?:the\s+)?"""), "")
-            .replace(Regex("""\s+(?:app|application|ko|please|abhi)$"""), "")
+            .replace('’', '\'')
+            .replace(Regex("""^(?:the|my|zara|mera|mujhe|please|bhai|yaar)\s+"""), "")
+            .replace(Regex("""\s+(?:app|application|ko|please|abhi|jaldi|जरा|ऐप|को)$"""), "")
+            .replace(Regex("""\s+(?:app|ko)$"""), "")
             .replace(Regex("""\s+"""), " ")
             .trim()
     }
 
     private fun normalizeLabel(raw: String): String {
         return raw.lowercase(Locale.ROOT)
+            .replace('’', '\'')
             .replace(Regex("""\s+"""), " ")
             .trim()
     }
 
     private fun findKnownAppSpec(cleanQuery: String): KnownAppSpec? {
+        val compactQuery = cleanQuery.replace(" ", "").replace("'", "")
         return knownApps.firstOrNull { spec ->
-            spec.aliases.any { it.equals(cleanQuery, ignoreCase = true) }
+            spec.aliases.any { alias ->
+                alias.equals(cleanQuery, ignoreCase = true) ||
+                    alias.replace(" ", "").replace("'", "").equals(compactQuery, ignoreCase = true)
+            }
         }
     }
 
     private fun findMatchingInstalledApps(cleanQuery: String, installedApps: List<InstalledAppInfo>): List<InstalledAppInfo> {
         if (cleanQuery.isBlank()) return emptyList()
-        val compactQuery = cleanQuery.replace(" ", "")
+        val compactQuery = cleanQuery.replace(" ", "").replace("'", "")
+
+        val exactCompact = installedApps.filter { app ->
+            normalizeLabel(app.label).replace(" ", "").replace("'", "") == compactQuery
+        }
+        if (exactCompact.isNotEmpty()) return exactCompact
 
         val startsWithMatches = installedApps.filter { app ->
             val normLabel = normalizeLabel(app.label)
@@ -1388,10 +1515,39 @@ class AndroidDeviceController(
         if (wordMatches.isNotEmpty()) return wordMatches
 
         if (cleanQuery.length < 3) return emptyList()
-        return installedApps.filter { app ->
+        val containsMatches = installedApps.filter { app ->
             val normLabel = normalizeLabel(app.label)
             normLabel.contains(cleanQuery) || normLabel.replace(" ", "").contains(compactQuery)
         }
+        if (containsMatches.isNotEmpty()) return containsMatches
+
+        // Bounded Levenshtein tolerance for slight voice transcription typos on app names >= 5 chars
+        if (compactQuery.length >= 5) {
+            val maxDist = if (compactQuery.length >= 8) 2 else 1
+            return installedApps.filter { app ->
+                val compactLabel = normalizeLabel(app.label).replace(" ", "")
+                kotlin.math.abs(compactLabel.length - compactQuery.length) <= maxDist &&
+                    levenshteinDistance(compactQuery, compactLabel) <= maxDist
+            }
+        }
+        return emptyList()
+    }
+
+    private fun levenshteinDistance(a: String, b: String): Int {
+        if (a == b) return 0
+        if (a.isEmpty()) return b.length
+        if (b.isEmpty()) return a.length
+        val prev = IntArray(b.length + 1) { it }
+        val curr = IntArray(b.length + 1)
+        for (i in a.indices) {
+            curr[0] = i + 1
+            for (j in b.indices) {
+                val cost = if (a[i] == b[j]) 0 else 1
+                curr[j + 1] = minOf(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost)
+            }
+            System.arraycopy(curr, 0, prev, 0, prev.size)
+        }
+        return prev[b.length]
     }
 
     private fun looksLikeWebsiteOrUrl(input: String): Boolean {

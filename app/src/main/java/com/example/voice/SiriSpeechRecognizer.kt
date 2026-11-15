@@ -188,6 +188,14 @@ class SiriSpeechRecognizer(
         currentLanguage = language
     }
 
+    fun warmUp() {
+        runOnMain {
+            if (!isDestroyed.get() && speechRecognizer == null && SpeechRecognizer.isRecognitionAvailable(appContext)) {
+                createRecognizerOnMain()
+            }
+        }
+    }
+
     fun startListening() {
         runOnMain {
             if (isDestroyed.get()) return@runOnMain
@@ -220,9 +228,10 @@ class SiriSpeechRecognizer(
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1400L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1200L)
+                // Fast responsive endpointing: finalizes ~0.85s after user stops speaking
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 850L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 600L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 450L)
 
                 val langLocale = when (currentLanguage) {
                     LanguageOption.HINDI -> "hi-IN"

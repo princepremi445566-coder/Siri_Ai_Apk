@@ -8,31 +8,37 @@ import android.util.Base64
 import android.util.Log
 import com.example.BuildConfig
 import com.example.model.AiConfig
+import com.example.model.AssistantEmotion
 import com.example.model.LanguageOption
 import com.example.model.UserPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
+import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 
 data class AiGenerationResult(
     val text: String,
     val latencyMs: Long = 0L,
-    val isSuccess: Boolean = true
+    val isSuccess: Boolean = true,
+    val emotion: AssistantEmotion = AssistantEmotion.NEUTRAL
 )
 
 class AiBrainRepository(private val context: Context) {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(4, 5, TimeUnit.MINUTES))
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
     fun getEffectiveApiKey(config: AiConfig): String {
@@ -137,6 +143,306 @@ class AiBrainRepository(private val context: Context) {
         }
     }
 
+    private fun buildFullSystemPrompt(
+        config: AiConfig,
+        language: LanguageOption,
+        userPrefs: UserPreferences
+    ): String {
+        val assistantName = userPrefs.assistantName.trim().ifBlank { "Siri" }
+        val userAddress = userPrefs.userName.trim().ifBlank { "Friend" }
+
+        val langInstruction = when (language) {
+            LanguageOption.HINDI -> "STRICT LANGUAGE REQUIREMENT: You MUST reply entirely in natural, warm, conversational Hindi using Devanagari script (हिन्दी). Sound friendly and human—avoid stiff textbook Hindi. Keep it crisp in 1-3 spoken sentences with zero markdown or bullet points."
+            LanguageOption.HINGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in natural, friendly everyday Hinglish written entirely in the Latin/Roman alphabet (for example: 'Haan bilkul! Chaliye isse aasan shabdon mein samajhte hain.'). Sound warm and human in 1-3 spoken sentences with zero markdown."
+            LanguageOption.ENGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in warm, fluent, conversational English using natural contractions and human cadence. Keep it concise (1-3 sentences) and voice-ready without markdown or robotic filler."
+            LanguageOption.AUTO -> "Detect whether the user is speaking English, Hindi (Devanagari), or Hinglish (Latin alphabet), and reply naturally in that exact matching style. Keep it warm, human, and voice-ready in 1-3 sentences without markdown."
+        }
+
+        val currentTimeDate = java.text.SimpleDateFormat("EEEE, MMMM d, yyyy h:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+        val addressRule = if (userAddress.equals("Friend", ignoreCase = true)) {
+            "User addressing: Address the user warmly and naturally (you can occasionally say 'friend' or speak directly without forcing a title)."
+        } else {
+            "User addressing: The user asked to be addressed as '$userAddress'. Address them naturally as '$userAddress' where warm and fitting (do not force it into every single sentence)."
+        }
+
+        return "${config.systemPrompt}\n" +
+            "Assistant identity: Your name is $assistantName. Always refer to yourself as $assistantName if asked who you are.\n" +
+            "$addressRule\n" +
+            "User context: Home='${userPrefs.homeLocation}', Work='${userPrefs.workLocation}', TempUnit='${userPrefs.preferredTempUnit}'.\n" +
+            "Current date and time: $currentTimeDate\n" +
+            "Length instruction: ${config.responseLength.instruction}\n" +
+            "Language instruction: $langInstruction\n" +
+            "Emotional intelligence: At the very beginning of your reply, optionally prepend a single emotion tag chosen ONLY from [EMOTION:HAPPY], [EMOTION:SAD], [EMOTION:EXCITED], [EMOTION:SURPRISED], [EMOTION:CURIOUS], [EMOTION:SERIOUS], or [EMOTION:NEUTRAL] matching the conversation's feeling. Vary your phrasing across turns so you never sound repetitive or robotic.\n" +
+            "Conversational continuity: Maintain deep context across turns. Understand short follow-ups ('why?', 'tell me more', 'aur batao', 'short mein batao', 'in Hindi', 'what about tomorrow?', 'that'/'it'/'iska') cleanly from the recent dialogue."
+    }
+
+    private fun buildGeminiPayload(
+        prompt: String,
+        config: AiConfig,
+        fullSystemPrompt: String,
+        recentHistory: List<Pair<String, Boolean>>,
+        imageUri: Uri?
+    ): JSONObject {
+        val root = JSONObject()
+        val sysInstructionObj = JSONObject().apply {
+            put("parts", JSONArray().apply {
+                put(JSONObject().apply { put("text", fullSystemPrompt) })
+            })
+        }
+        root.put("systemInstruction", sysInstructionObj)
+
+        val contentsArray = JSONArray()
+        val historySlice = recentHistory.takeLast(12)
+        for ((text, isUser) in historySlice) {
+            val role = if (isUser) "user" else "model"
+            contentsArray.put(JSONObject().apply {
+                put("role", role)
+                put("parts", JSONArray().apply {
+                    put(JSONObject().apply { put("text", text) })
+                })
+            })
+        }
+
+        val userTurnParts = JSONArray()
+        if (imageUri != null) {
+            val base64Image = readImageAsBase64(imageUri)
+            if (base64Image != null) {
+                val inlineData = JSONObject().apply {
+                    put("mime_type", "image/jpeg")
+                    put("data", base64Image)
+                }
+                userTurnParts.put(JSONObject().apply {
+                    put("inline_data", inlineData)
+                })
+            }
+        }
+        userTurnParts.put(JSONObject().apply { put("text", prompt) })
+        contentsArray.put(JSONObject().apply {
+            put("role", "user")
+            put("parts", userTurnParts)
+        })
+        root.put("contents", contentsArray)
+
+        val genConfig = JSONObject().apply {
+            put("temperature", config.temperature.toDouble())
+            put("maxOutputTokens", config.maxOutputTokens)
+            // Minimize Gemini 2.5 Flash thinking latency for real-time conversational turn-taking
+            if (config.model.contains("gemini-2.5", ignoreCase = true) &&
+                !config.model.contains("pro", ignoreCase = true)
+            ) {
+                put("thinkingConfig", JSONObject().apply {
+                    put("thinkingBudget", 0)
+                })
+            }
+        }
+        root.put("generationConfig", genConfig)
+        return root
+    }
+
+    /**
+     * Streaming conversational generation for low-latency voice turn-taking.
+     * Emits each complete sentence via [onSentenceReady] as soon as it arrives from Gemini SSE,
+     * falling back cleanly to [generateResponse] on custom endpoints, multimodal inputs, or SSE fallback.
+     */
+    suspend fun generateResponseStreaming(
+        prompt: String,
+        config: AiConfig,
+        language: LanguageOption,
+        recentHistory: List<Pair<String, Boolean>> = emptyList(),
+        imageUri: Uri? = null,
+        userPrefs: UserPreferences = UserPreferences(),
+        onSentenceReady: suspend (sentence: String, isFirst: Boolean, emotion: AssistantEmotion) -> Unit
+    ): AiGenerationResult = withContext(Dispatchers.IO) {
+        val apiKey = getEffectiveApiKey(config)
+        val isCustomApi = config.provider == "Custom / OpenAI API" || config.customEndpoint.isNotBlank()
+
+        if ((apiKey.isBlank() && !isCustomApi) || isCustomApi || imageUri != null) {
+            val res = generateResponse(
+                prompt = prompt,
+                config = config,
+                language = language,
+                recentHistory = recentHistory,
+                imageUri = imageUri,
+                userPrefs = userPrefs
+            )
+            onSentenceReady(res.text, true, res.emotion)
+            return@withContext res
+        }
+
+        val startTime = System.currentTimeMillis()
+        val fullSystemPrompt = buildFullSystemPrompt(config, language, userPrefs)
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/${config.model}:streamGenerateContent?alt=sse&key=$apiKey"
+        val payload = buildGeminiPayload(prompt, config, fullSystemPrompt, recentHistory, null)
+        val request = Request.Builder()
+            .url(url)
+            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        try {
+            val streamResult = client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val errBody = response.body?.string().orEmpty()
+                    Log.w("SiriAI", "SSE stream error $code, falling back: $errBody")
+                    return@use null
+                }
+
+                val body = response.body ?: return@use null
+                val reader = BufferedReader(InputStreamReader(body.byteStream(), Charsets.UTF_8))
+
+                val rawAccumulated = StringBuilder()
+                val pendingBuffer = StringBuilder()
+                var headerResolved = false
+                var detectedTagEmotion: AssistantEmotion? = null
+                var emittedFirst = false
+                var activeEmotion = EmotionDetector.inferEmotion(prompt, "", isSuccess = true)
+
+                val eventLines = StringBuilder()
+                suspend fun processEventJson(jsonStr: String) {
+                    if (jsonStr.isBlank() || jsonStr == "[DONE]") return
+                    val deltaText = extractTextFromGeminiJson(jsonStr)
+                    if (deltaText.isEmpty()) return
+                    rawAccumulated.append(deltaText)
+                    pendingBuffer.append(deltaText)
+
+                    if (!headerResolved) {
+                        val currentTrimmed = pendingBuffer.toString().trimStart()
+                        if (currentTrimmed.startsWith("[EMOTION:", ignoreCase = true) ||
+                            (currentTrimmed.startsWith("[") && currentTrimmed.length < 24 && !currentTrimmed.contains("]"))
+                        ) {
+                            val closeIdx = currentTrimmed.indexOf(']')
+                            if (closeIdx < 0) {
+                                return
+                            }
+                            val (tag, stripped) = EmotionDetector.extractAndStripEmotionTag(currentTrimmed)
+                            detectedTagEmotion = tag
+                            activeEmotion = EmotionDetector.inferEmotion(prompt, stripped, explicitTag = tag)
+                            pendingBuffer.clear()
+                            pendingBuffer.append(stripped)
+                            headerResolved = true
+                        } else if (currentTrimmed.isNotEmpty()) {
+                            headerResolved = true
+                        }
+                    }
+
+                    // Flush completed sentences immediately for fast TTS playback
+                    while (true) {
+                        val bufStr = pendingBuffer.toString()
+                        val boundaryIdx = findSentenceBoundary(bufStr)
+                        if (boundaryIdx < 0) break
+                        val sentenceRaw = bufStr.substring(0, boundaryIdx + 1)
+                        val remaining = bufStr.substring(boundaryIdx + 1).trimStart()
+                        pendingBuffer.clear()
+                        pendingBuffer.append(remaining)
+                        val cleaned = cleanVoiceText(sentenceRaw)
+                        if (cleaned.isNotBlank()) {
+                            if (!emittedFirst) {
+                                activeEmotion = EmotionDetector.inferEmotion(
+                                    prompt,
+                                    cleaned,
+                                    explicitTag = detectedTagEmotion
+                                )
+                            }
+                            onSentenceReady(cleaned, !emittedFirst, activeEmotion)
+                            emittedFirst = true
+                        }
+                    }
+                }
+
+                var line: String? = reader.readLine()
+                while (line != null) {
+                    val trimmedLine = line.trimEnd()
+                    if (trimmedLine.startsWith("data:")) {
+                        eventLines.append(trimmedLine.removePrefix("data:").trim())
+                    } else if (trimmedLine.isEmpty() && eventLines.isNotEmpty()) {
+                        processEventJson(eventLines.toString())
+                        eventLines.clear()
+                    }
+                    line = reader.readLine()
+                }
+                if (eventLines.isNotEmpty()) {
+                    processEventJson(eventLines.toString())
+                }
+
+                val (tag, fullStripped) = EmotionDetector.extractAndStripEmotionTag(rawAccumulated.toString())
+                val cleanedFull = cleanVoiceText(fullStripped)
+                val finalEmotion = EmotionDetector.inferEmotion(prompt, cleanedFull, explicitTag = tag ?: detectedTagEmotion)
+
+                // Emit remaining tail
+                val (_, strippedTail) = EmotionDetector.extractAndStripEmotionTag(pendingBuffer.toString())
+                val remainingClean = cleanVoiceText(strippedTail)
+                if (remainingClean.isNotBlank()) {
+                    onSentenceReady(remainingClean, !emittedFirst, finalEmotion)
+                }
+
+                val latency = System.currentTimeMillis() - startTime
+                if (cleanedFull.isNotBlank()) {
+                    AiGenerationResult(
+                        text = cleanedFull,
+                        latencyMs = latency,
+                        isSuccess = true,
+                        emotion = finalEmotion
+                    )
+                } else {
+                    null
+                }
+            }
+
+            if (streamResult != null) {
+                return@withContext streamResult
+            }
+        } catch (e: Exception) {
+            Log.w("SiriAI", "Streaming fallback due to: ${e.message}")
+        }
+
+        // Clean fallback to standard request if SSE was unavailable or empty
+        val fallback = generateResponse(
+            prompt = prompt,
+            config = config,
+            language = language,
+            recentHistory = recentHistory,
+            imageUri = null,
+            userPrefs = userPrefs
+        )
+        onSentenceReady(fallback.text, true, fallback.emotion)
+        fallback
+    }
+
+    private fun extractTextFromGeminiJson(jsonStr: String): String {
+        return try {
+            val json = JSONObject(jsonStr)
+            val candidates = json.optJSONArray("candidates") ?: return ""
+            if (candidates.length() == 0) return ""
+            val content = candidates.getJSONObject(0).optJSONObject("content") ?: return ""
+            val parts = content.optJSONArray("parts") ?: return ""
+            buildString {
+                for (i in 0 until parts.length()) {
+                    val pObj = parts.optJSONObject(i) ?: continue
+                    if (!pObj.optBoolean("thought", false)) {
+                        append(pObj.optString("text", ""))
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun findSentenceBoundary(text: String): Int {
+        for (i in text.indices) {
+            val ch = text[i]
+            if ((ch == '.' || ch == '!' || ch == '?' || ch == '।') && i >= 14) {
+                val next = text.getOrNull(i + 1)
+                // Avoid splitting abbreviations like "e.g." or decimals "3.5"
+                if (ch == '.' && next != null && next.isDigit()) continue
+                if (next == null || next.isWhitespace()) {
+                    return i
+                }
+            }
+        }
+        return -1
+    }
+
     /**
      * Generates a conversational response with history, vision support, and latency reporting
      */
@@ -162,35 +468,16 @@ class AiBrainRepository(private val context: Context) {
                 userAddress = userAddress,
                 recentHistory = recentHistory
             )
+            val emotion = EmotionDetector.inferEmotion(prompt, offlineMsg, isSuccess = false)
             return@withContext AiGenerationResult(
                 text = offlineMsg,
                 latencyMs = 5L,
-                isSuccess = false
+                isSuccess = false,
+                emotion = emotion
             )
         }
 
-        val langInstruction = when (language) {
-            LanguageOption.HINDI -> "STRICT LANGUAGE REQUIREMENT: You MUST reply entirely in natural, warm, conversational Hindi using Devanagari script (हिन्दी). Sound friendly and human—avoid stiff textbook Hindi. Keep it crisp in 1-3 spoken sentences with zero markdown or bullet points."
-            LanguageOption.HINGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in natural, friendly everyday Hinglish written entirely in the Latin/Roman alphabet (for example: 'Haan bilkul! Chaliye isse aasan shabdon mein samajhte hain.'). Sound warm and human in 1-3 spoken sentences with zero markdown."
-            LanguageOption.ENGLISH -> "STRICT LANGUAGE REQUIREMENT: You MUST reply in warm, fluent, conversational English using natural contractions and human cadence. Keep it concise (1-3 sentences) and voice-ready without markdown or robotic filler."
-            LanguageOption.AUTO -> "Detect whether the user is speaking English, Hindi (Devanagari), or Hinglish (Latin alphabet), and reply naturally in that exact matching style. Keep it warm, human, and voice-ready in 1-3 sentences without markdown."
-        }
-
-        val currentTimeDate = java.text.SimpleDateFormat("EEEE, MMMM d, yyyy h:mm a", java.util.Locale.getDefault()).format(java.util.Date())
-        val lengthInstruction = config.responseLength.instruction
-        val addressRule = if (userAddress.equals("Friend", ignoreCase = true)) {
-            "User addressing: Address the user warmly and naturally (you can occasionally say 'friend' or speak directly without forcing a title)."
-        } else {
-            "User addressing: The user asked to be addressed as '$userAddress'. Address them naturally as '$userAddress' where warm and fitting (do not force it into every single sentence)."
-        }
-        val fullSystemPrompt = "${config.systemPrompt}\n" +
-            "Assistant identity: Your name is $assistantName. Always refer to yourself as $assistantName if asked who you are.\n" +
-            "$addressRule\n" +
-            "User context: Home='${userPrefs.homeLocation}', Work='${userPrefs.workLocation}', TempUnit='${userPrefs.preferredTempUnit}'.\n" +
-            "Current date and time: $currentTimeDate\n" +
-            "Length instruction: $lengthInstruction\n" +
-            "Language instruction: $langInstruction\n" +
-            "Conversational continuity: Maintain deep context across turns. Understand short follow-ups ('why?', 'tell me more', 'aur batao', 'short mein batao', 'in Hindi', 'what about tomorrow?', 'that'/'it'/'iska') cleanly from the recent dialogue."
+        val fullSystemPrompt = buildFullSystemPrompt(config, language, userPrefs)
 
         try {
             if (isCustomApi) {
@@ -266,7 +553,8 @@ class AiBrainRepository(private val context: Context) {
                     return@withContext AiGenerationResult(
                         text = "Error connecting to Custom API: $errMsg. Local device controls remain active.",
                         latencyMs = latency,
-                        isSuccess = false
+                        isSuccess = false,
+                        emotion = AssistantEmotion.SAD
                     )
                 }
 
@@ -277,74 +565,22 @@ class AiBrainRepository(private val context: Context) {
                     val msgObj = firstChoice.optJSONObject("message")
                     val content = msgObj?.optString("content", "") ?: ""
                     if (content.isNotBlank()) {
+                        val (tag, stripped) = EmotionDetector.extractAndStripEmotionTag(content)
+                        val cleaned = cleanVoiceText(stripped)
+                        val emotion = EmotionDetector.inferEmotion(prompt, cleaned, explicitTag = tag)
                         return@withContext AiGenerationResult(
-                            text = cleanVoiceText(content),
+                            text = cleaned,
                             latencyMs = latency,
-                            isSuccess = true
+                            isSuccess = true,
+                            emotion = emotion
                         )
                     }
                 }
-                return@withContext AiGenerationResult("Empty response received from Custom API.", latency, false)
+                return@withContext AiGenerationResult("Empty response received from Custom API.", latency, false, AssistantEmotion.SAD)
             } else {
                 // Google Gemini API
                 val url = "https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent?key=$apiKey"
-                val root = JSONObject()
-
-                // System instruction
-                val sysInstructionObj = JSONObject().apply {
-                    put("parts", JSONArray().apply {
-                        put(JSONObject().apply { put("text", fullSystemPrompt) })
-                    })
-                }
-                root.put("systemInstruction", sysInstructionObj)
-
-                // Contents array with history
-                val contentsArray = JSONArray()
-
-                // Deep multi-turn context (last 12 messages)
-                val historySlice = recentHistory.takeLast(12)
-                for ((text, isUser) in historySlice) {
-                    val role = if (isUser) "user" else "model"
-                    contentsArray.put(JSONObject().apply {
-                        put("role", role)
-                        put("parts", JSONArray().apply {
-                            put(JSONObject().apply { put("text", text) })
-                        })
-                    })
-                }
-
-                // Current user turn with optional image
-                val userTurnParts = JSONArray()
-
-                if (imageUri != null) {
-                    val base64Image = readImageAsBase64(imageUri)
-                    if (base64Image != null) {
-                        val inlineData = JSONObject().apply {
-                            put("mime_type", "image/jpeg")
-                            put("data", base64Image)
-                        }
-                        userTurnParts.put(JSONObject().apply {
-                            put("inline_data", inlineData)
-                        })
-                    }
-                }
-
-                userTurnParts.put(JSONObject().apply {
-                    put("text", prompt)
-                })
-
-                contentsArray.put(JSONObject().apply {
-                    put("role", "user")
-                    put("parts", userTurnParts)
-                })
-
-                root.put("contents", contentsArray)
-
-                val genConfig = JSONObject().apply {
-                    put("temperature", config.temperature.toDouble())
-                    put("maxOutputTokens", config.maxOutputTokens)
-                }
-                root.put("generationConfig", genConfig)
+                val root = buildGeminiPayload(prompt, config, fullSystemPrompt, recentHistory, imageUri)
 
                 val body = root.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder().url(url).post(body).build()
@@ -364,48 +600,33 @@ class AiBrainRepository(private val context: Context) {
                     return@withContext AiGenerationResult(
                         text = "I encountered an error connecting to the AI brain: $errMsg. I can still perform local device actions for you.",
                         latencyMs = latency,
-                        isSuccess = false
+                        isSuccess = false,
+                        emotion = AssistantEmotion.SAD
                     )
                 }
 
-                val respJson = JSONObject(respString)
-                val candidates = respJson.optJSONArray("candidates")
-                if (candidates != null && candidates.length() > 0) {
-                    val firstCandidate = candidates.getJSONObject(0)
-                    val content = firstCandidate.optJSONObject("content")
-                    val parts = content?.optJSONArray("parts")
-                    if (parts != null && parts.length() > 0) {
-                        val combinedText = buildString {
-                            for (i in 0 until parts.length()) {
-                                val pObj = parts.optJSONObject(i) ?: continue
-                                if (!pObj.optBoolean("thought", false)) {
-                                    val t = pObj.optString("text", "")
-                                    if (t.isNotBlank()) {
-                                        if (isNotEmpty()) append(' ')
-                                        append(t)
-                                    }
-                                }
-                            }
-                        }
-                        if (combinedText.isNotBlank()) {
-                            return@withContext AiGenerationResult(
-                                text = cleanVoiceText(combinedText),
-                                latencyMs = latency,
-                                isSuccess = true
-                            )
-                        }
-                    }
+                val combinedText = extractTextFromGeminiJson(respString)
+                if (combinedText.isNotBlank()) {
+                    val (tag, stripped) = EmotionDetector.extractAndStripEmotionTag(combinedText)
+                    val cleaned = cleanVoiceText(stripped)
+                    val emotion = EmotionDetector.inferEmotion(prompt, cleaned, explicitTag = tag)
+                    return@withContext AiGenerationResult(
+                        text = cleaned,
+                        latencyMs = latency,
+                        isSuccess = true,
+                        emotion = emotion
+                    )
                 }
-                AiGenerationResult("I heard you, but could not generate a response. Please try again.", latency, false)
+                AiGenerationResult("I heard you, but could not generate a response. Please try again.", latency, false, AssistantEmotion.SAD)
             }
         } catch (e: IllegalArgumentException) {
             val latency = System.currentTimeMillis() - startTime
             Log.e("SiriAI", "Invalid URL", e)
-            AiGenerationResult("Invalid API endpoint URL. Please check Settings.", latency, false)
+            AiGenerationResult("Invalid API endpoint URL. Please check Settings.", latency, false, AssistantEmotion.SERIOUS)
         } catch (e: Exception) {
             val latency = System.currentTimeMillis() - startTime
             Log.e("SiriAI", "Generation exception", e)
-            AiGenerationResult("I'm having trouble connecting to the network right now. Device controls and local features are still available.", latency, false)
+            AiGenerationResult("I'm having trouble connecting to the network right now. Device controls and local features are still available.", latency, false, AssistantEmotion.SAD)
         }
     }
 
@@ -479,10 +700,23 @@ class AiBrainRepository(private val context: Context) {
             }
         }
 
+        val variant = (prompt.length + recentHistory.size) % 2
         return when (effectiveLang) {
-            LanguageOption.HINDI -> "मैं $assistantName हूँ${if (nameTag.isNotEmpty()) ", $userAddress" else ""}। अभी लाइव AI जवाब के लिए API कुंजी सेट नहीं है, लेकिन आप मुझसे ऐप्स खोलने, ब्राइटनेस या वॉल्यूम बदलने, अलार्म लगाने और वेब सर्च करने के लिए कह सकते हैं।"
-            LanguageOption.HINGLISH -> "Hey$nameTag, main $assistantName hoon! Abhi cloud AI ke liye API key set nahi hai, par aap Settings mein key add karke mujhse bilkul natural baat kar sakte hain. Abhi ke liye aap apps, settings, alarms ya battery control karwa sakte hain."
-            else -> "Hey$nameTag, I'm $assistantName! Cloud conversation needs an API key in Settings, but I'm right here for opening apps, searching inside apps, setting alarms, or adjusting your device settings."
+            LanguageOption.HINDI -> if (variant == 0) {
+                "मैं $assistantName हूँ${if (nameTag.isNotEmpty()) ", $userAddress" else ""}। अभी लाइव AI जवाब के लिए API कुंजी सेट नहीं है, लेकिन आप मुझसे ऐप्स खोलने, ब्राइटनेस या वॉल्यूम बदलने, अलार्म लगाने और वेब सर्च करने के लिए कह सकते हैं।"
+            } else {
+                "बेशक${if (nameTag.isNotEmpty()) ", $userAddress" else ""}—मैं $assistantName आपके डिवाइस के सभी कामों के लिए तैयार हूँ। गहरी बातचीत के लिए बस सेटिंग्स में API कुंजी जोड़ दें।"
+            }
+            LanguageOption.HINGLISH -> if (variant == 0) {
+                "Hey$nameTag, main $assistantName hoon! Abhi cloud AI ke liye API key set nahi hai, par aap Settings mein key add karke mujhse bilkul natural baat kar sakte hain. Abhi ke liye aap apps, settings, alarms ya battery control karwa sakte hain."
+            } else {
+                "Bilkul$nameTag, main $assistantName yahin hoon! Cloud AI chat ke liye Settings mein API key lagayein, aur tab tak apps open karne ya search karne ke liye boliye."
+            }
+            else -> if (variant == 0) {
+                "Hey$nameTag, I'm $assistantName! Cloud conversation needs an API key in Settings, but I'm right here for opening apps, searching inside apps, setting alarms, or adjusting your device settings."
+            } else {
+                "I hear you$nameTag! Add an API key in Settings whenever you're ready for full AI chat—meanwhile, I can launch apps, adjust settings, or search the web right away."
+            }
         }
     }
 
@@ -491,7 +725,8 @@ class AiBrainRepository(private val context: Context) {
      * to ensure the assistant's response is natural, clean, and voice-ready for TTS.
      */
     fun cleanVoiceText(raw: String): String {
-        return raw
+        val (_, tagStripped) = EmotionDetector.extractAndStripEmotionTag(raw)
+        return tagStripped
             .replace(Regex("""\*\*([^*]+)\*\*"""), "$1")
             .replace(Regex("""\*([^*]+)\*"""), "$1")
             .replace(Regex("""__([^_]+)__"""), "$1")
@@ -506,3 +741,4 @@ class AiBrainRepository(private val context: Context) {
             .trim()
     }
 }
+

@@ -29,8 +29,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Path
+import com.example.model.AssistantEmotion
 import com.example.model.VoiceState
 import com.example.ui.theme.SiriChampagneGold
 import com.example.ui.theme.SiriCyan
@@ -43,19 +43,13 @@ import com.example.ui.theme.SiriNeonBlue
 import com.example.ui.theme.SiriViolet
 import com.example.ui.theme.SiriWarmGold
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.sin
 
 /**
- * Premium, futuristic, ultra-smooth 3D multi-layered Siri voice orb.
- *
- * Visual hierarchy:
- * 1. Deep atmospheric volumetric diffuse glow
- * 2. Translucent floating micro-particles drifting in 3D parallax orbits
- * 3. Gyroscopic 3D-projected tilted orbital rings (equatorial, polar & reactive resonance)
- * 4. Dense 3D volumetric glass sphere with internal swirling plasma lights (Cyan, Blue, Violet, Magenta)
- * 5. Optical Fresnel rim lighting (inner edge refraction)
- * 6. Dual curved caustic specular reflections (primary curved glint + ambient bounce)
- * 7. Audio-reactive resonance ripples synchronized with microphone amplitude and speech output
+ * Emotionally expressive 3D multi-layered Siri voice orb with live holographic facial expressions.
+ * Preserves the obsidian-gold volumetric sphere, orbital rings, and resonance ripples while
+ * adapting eye, brow, mouth, and aura expressions to conversation state & emotion.
  */
 @Composable
 fun SiriOrb(
@@ -64,18 +58,29 @@ fun SiriOrb(
     modifier: Modifier = Modifier,
     orbSize: Dp = 240.dp,
     reducedMotion: Boolean = false,
+    emotion: AssistantEmotion = AssistantEmotion.NEUTRAL,
     onClick: () -> Unit = {}
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "siri_orb_3d_transition")
 
-    // State-based animation parameters
-    val rotationSpeed = when (voiceState) {
+    // Emotion + state-based animation speed
+    val emotionSpeedFactor = when (emotion) {
+        AssistantEmotion.EXCITED -> 0.72f
+        AssistantEmotion.SURPRISED -> 0.80f
+        AssistantEmotion.HAPPY -> 0.88f
+        AssistantEmotion.CURIOUS -> 0.92f
+        AssistantEmotion.SAD -> 1.38f
+        AssistantEmotion.SERIOUS -> 1.18f
+        AssistantEmotion.NEUTRAL -> 1.0f
+    }
+    val baseRotationSpeed = when (voiceState) {
         VoiceState.THINKING -> 2200
         VoiceState.SPEAKING -> 4200
         VoiceState.LISTENING -> 3200
         VoiceState.ERROR -> 9000
         VoiceState.IDLE -> 7500
     }
+    val rotationSpeed = (baseRotationSpeed * emotionSpeedFactor).toInt().coerceIn(1400, 12000)
 
     // 1. Continuous smooth rotation of the internal plasma core
     val coreRotation by infiniteTransition.animateFloat(
@@ -101,11 +106,16 @@ fun SiriOrb(
 
     // 3. Gentle organic breathing cycle
     val breathScale by infiniteTransition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.04f,
+        initialValue = if (emotion == AssistantEmotion.EXCITED) 0.94f else 0.96f,
+        targetValue = if (emotion == AssistantEmotion.EXCITED) 1.06f else 1.04f,
         animationSpec = infiniteRepeatable(
             animation = tween(
-                durationMillis = if (voiceState == VoiceState.THINKING) 1200 else 2400,
+                durationMillis = when {
+                    voiceState == VoiceState.THINKING -> 1150
+                    emotion == AssistantEmotion.EXCITED -> 1100
+                    emotion == AssistantEmotion.SAD -> 3100
+                    else -> 2400
+                },
                 easing = FastOutSlowInEasing
             ),
             repeatMode = RepeatMode.Reverse
@@ -119,7 +129,7 @@ fun SiriOrb(
         targetValue = (2 * Math.PI).toFloat(),
         animationSpec = infiniteRepeatable(
             animation = tween(
-                durationMillis = if (voiceState == VoiceState.SPEAKING) 900 else 1600,
+                durationMillis = if (voiceState == VoiceState.SPEAKING) 780 else 1500,
                 easing = LinearEasing
             ),
             repeatMode = RepeatMode.Restart
@@ -138,10 +148,30 @@ fun SiriOrb(
         label = "particlePhase"
     )
 
-    // 6. Smooth animated responsiveness to state changes & audio levels
+    // 6. Natural organic blinking phase (brief dip near end of 3.6s cycle)
+    val blinkCycle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "blinkCycle"
+    )
+    val blinkOpenness = if (reducedMotion) {
+        1f
+    } else {
+        when {
+            blinkCycle in 0.93f..0.96f -> (1f - (blinkCycle - 0.93f) / 0.03f).coerceIn(0.08f, 1f)
+            blinkCycle > 0.96f -> ((blinkCycle - 0.96f) / 0.04f).coerceIn(0.08f, 1f)
+            else -> 1f
+        }
+    }
+
+    // 7. Smooth animated responsiveness to state changes & audio levels
     val smoothAudio by animateFloatAsState(
         targetValue = audioLevel.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 90, easing = FastOutSlowInEasing),
         label = "smoothAudio"
     )
 
@@ -151,9 +181,13 @@ fun SiriOrb(
             VoiceState.THINKING -> 1.15f
             VoiceState.SPEAKING -> 1.08f
             VoiceState.ERROR -> 0.75f
-            VoiceState.IDLE -> 0.85f
+            VoiceState.IDLE -> 0.88f
+        } * when (emotion) {
+            AssistantEmotion.EXCITED -> 1.05f
+            AssistantEmotion.SAD -> 0.94f
+            else -> 1.0f
         },
-        animationSpec = tween(durationMillis = 400, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
         label = "stateEnergy"
     )
 
@@ -175,11 +209,10 @@ fun SiriOrb(
             val center = Offset(size.width / 2f, size.height / 2f)
             val baseRadius = (size.minDimension / 2f) * 0.72f
 
-            // Dynamic scale combining breath, audio decibels, and state energy
             val audioExpansion = if (voiceState == VoiceState.LISTENING) {
-                smoothAudio * 0.32f
+                smoothAudio * 0.30f
             } else if (voiceState == VoiceState.SPEAKING) {
-                0.08f * sin(wavePhase * 2f) + (smoothAudio * 0.15f)
+                0.08f * sin(wavePhase * 2f) + (smoothAudio * 0.14f)
             } else {
                 0f
             }
@@ -190,33 +223,57 @@ fun SiriOrb(
             val effectiveGyroAngle = if (reducedMotion) 45f else gyroAngle
             val effectiveWavePhase = if (reducedMotion) 0f else wavePhase
 
-            // Dynamic radiant Golden palette based on state
-            val (cPrimary, cSecondary, cTertiary, cAccent) = when (voiceState) {
-                VoiceState.ERROR -> listOf(
+            // Dynamic radiant palette guided by state & emotional tone
+            val (cPrimary, cSecondary, cTertiary, cAccent) = when {
+                voiceState == VoiceState.ERROR -> listOf(
                     Color(0xFFFF3D00),
                     Color(0xFFFF6D00),
                     SiriWarmGold,
                     Color(0xFFFFE0B2)
                 )
-                VoiceState.THINKING -> listOf(
+                emotion == AssistantEmotion.SAD -> listOf(
+                    Color(0xFF4FC3F7),
+                    SiriNeonBlue,
+                    SiriViolet,
+                    Color(0xFFE1F5FE)
+                )
+                emotion == AssistantEmotion.EXCITED -> listOf(
+                    SiriLightGold,
+                    SiriMagenta,
                     SiriGold,
-                    SiriWarmGold,
-                    SiriDeepGold,
                     SiriGoldWhite
                 )
-                VoiceState.LISTENING -> listOf(
+                emotion == AssistantEmotion.SURPRISED -> listOf(
+                    SiriCyan,
+                    SiriLightGold,
+                    SiriViolet,
+                    SiriGoldWhite
+                )
+                emotion == AssistantEmotion.CURIOUS -> listOf(
+                    SiriCyan,
+                    SiriGold,
+                    SiriViolet,
+                    SiriChampagneGold
+                )
+                emotion == AssistantEmotion.HAPPY -> listOf(
                     SiriLightGold,
                     SiriGold,
                     SiriWarmGold,
                     SiriGoldWhite
                 )
-                VoiceState.SPEAKING -> listOf(
-                    SiriGold,
+                emotion == AssistantEmotion.SERIOUS -> listOf(
                     SiriDeepGold,
-                    SiriWarmGold,
+                    Color(0xFFD97706),
+                    SiriNeonBlue,
                     SiriChampagneGold
                 )
-                VoiceState.IDLE -> listOf(
+                voiceState == VoiceState.LISTENING -> listOf(
+                    SiriLightGold,
+                    SiriGold,
+                    SiriCyan,
+                    SiriGoldWhite
+                )
+                else -> listOf(
                     SiriGold,
                     SiriWarmGold,
                     SiriDeepGold,
@@ -224,15 +281,13 @@ fun SiriOrb(
                 )
             }
 
-            // =================================================================
-            // LAYER 1: Deep Volumetric Atmospheric Bloom (Multi-layered Glow)
-            // =================================================================
+            // LAYER 1: Deep Volumetric Atmospheric Bloom
             val bloomRadius = currentRadius * (1.65f + (smoothAudio * 0.25f))
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        cPrimary.copy(alpha = 0.38f),
-                        cSecondary.copy(alpha = 0.20f),
+                        cPrimary.copy(alpha = 0.36f),
+                        cSecondary.copy(alpha = 0.18f),
                         cTertiary.copy(alpha = 0.08f),
                         Color.Transparent
                     ),
@@ -243,13 +298,12 @@ fun SiriOrb(
                 center = center
             )
 
-            // Secondary closer halo
             val innerHaloRadius = currentRadius * 1.28f
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        cSecondary.copy(alpha = 0.50f),
-                        cTertiary.copy(alpha = 0.22f),
+                        cSecondary.copy(alpha = 0.48f),
+                        cTertiary.copy(alpha = 0.20f),
                         Color.Transparent
                     ),
                     center = center,
@@ -259,9 +313,7 @@ fun SiriOrb(
                 center = center
             )
 
-            // =================================================================
-            // LAYER 2: Floating 3D Micro-Particles (Space/Holographic Depth)
-            // =================================================================
+            // LAYER 2: Floating 3D Micro-Particles
             if (!reducedMotion) {
                 drawFloatingParticles(
                     center = center,
@@ -273,9 +325,7 @@ fun SiriOrb(
                 )
             }
 
-            // =================================================================
-            // LAYER 3: 3D Gyroscopic Orbital Rings (Tilted Perspective Rings)
-            // =================================================================
+            // LAYER 3: 3D Gyroscopic Orbital Rings
             drawGyroscopicRings(
                 center = center,
                 radius = currentRadius,
@@ -289,9 +339,7 @@ fun SiriOrb(
                 cTertiary = cTertiary
             )
 
-            // =================================================================
-            // LAYER 4: Deep Spherical Core & Fluid Multi-Light Plasma
-            // =================================================================
+            // LAYER 4: Deep Spherical Core & Fluid Plasma
             drawVolumetricCore(
                 center = center,
                 radius = currentRadius,
@@ -304,9 +352,20 @@ fun SiriOrb(
                 cAccent = cAccent
             )
 
-            // =================================================================
-            // LAYER 5: Optical Fresnel Rim Lighting (Refractive Glass Edge)
-            // =================================================================
+            // LAYER 4B: Emotional Holographic Facial Expression (Eyes, Brows, Animated Mouth)
+            drawOrbExpression(
+                center = center,
+                radius = currentRadius,
+                voiceState = voiceState,
+                emotion = emotion,
+                wavePhase = effectiveWavePhase,
+                smoothAudio = smoothAudio,
+                blinkOpenness = blinkOpenness,
+                faceColor = Color.White,
+                glowColor = cAccent
+            )
+
+            // LAYER 5: Optical Fresnel Rim Lighting
             drawCircle(
                 brush = Brush.sweepGradient(
                     colors = listOf(
@@ -323,13 +382,230 @@ fun SiriOrb(
                 style = Stroke(width = 2.4.dp.toPx())
             )
 
-            // =================================================================
-            // LAYER 6: Curved 3D Specular Reflections (Glass Caustics)
-            // =================================================================
+            // LAYER 6: Curved 3D Specular Reflections
             drawGlassReflections(
                 center = center,
                 radius = currentRadius,
                 cAccent = cAccent
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawOrbExpression(
+    center: Offset,
+    radius: Float,
+    voiceState: VoiceState,
+    emotion: AssistantEmotion,
+    wavePhase: Float,
+    smoothAudio: Float,
+    blinkOpenness: Float,
+    faceColor: Color,
+    glowColor: Color
+) {
+    val strokeW = (radius * 0.055f).coerceIn(2.0f, 5.5f)
+    val eyeSpacingX = radius * 0.29f
+    val eyeBaseY = center.y - radius * 0.11f
+
+    // Thinking horizontal gaze shift
+    val gazeShiftX = if (voiceState == VoiceState.THINKING) {
+        radius * 0.08f * sin(wavePhase * 0.8f)
+    } else {
+        0f
+    }
+    val leftEyeCenter = Offset(center.x - eyeSpacingX + gazeShiftX, eyeBaseY)
+    val rightEyeCenter = Offset(center.x + eyeSpacingX + gazeShiftX, eyeBaseY)
+
+    // Soft dark visor backing behind facial expression so glowing features stay crystal clear
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color(0xAA080D18),
+                Color(0x55080D18),
+                Color.Transparent
+            ),
+            center = center,
+            radius = radius * 0.74f
+        ),
+        radius = radius * 0.74f,
+        center = center
+    )
+
+    // 1. Expressive Eyebrows
+    val browYOffset = when (emotion) {
+        AssistantEmotion.SURPRISED -> -radius * 0.21f
+        AssistantEmotion.CURIOUS -> -radius * 0.17f
+        AssistantEmotion.EXCITED -> -radius * 0.18f
+        AssistantEmotion.SERIOUS -> -radius * 0.12f
+        else -> -radius * 0.15f
+    }
+    val leftBrowTilt = when (emotion) {
+        AssistantEmotion.SAD -> -0.10f * radius
+        AssistantEmotion.SERIOUS -> 0.08f * radius
+        AssistantEmotion.CURIOUS -> -0.06f * radius
+        else -> 0f
+    }
+    val rightBrowTilt = when (emotion) {
+        AssistantEmotion.SAD -> -0.10f * radius
+        AssistantEmotion.SERIOUS -> 0.08f * radius
+        AssistantEmotion.CURIOUS -> 0.05f * radius
+        else -> 0f
+    }
+    val browHalfW = radius * 0.12f
+    if (emotion != AssistantEmotion.NEUTRAL || voiceState == VoiceState.THINKING) {
+        val leftInnerY = leftEyeCenter.y + browYOffset + leftBrowTilt
+        val leftOuterY = leftEyeCenter.y + browYOffset - leftBrowTilt
+        drawLine(
+            color = glowColor.copy(alpha = 0.85f),
+            start = Offset(leftEyeCenter.x - browHalfW, leftOuterY),
+            end = Offset(leftEyeCenter.x + browHalfW, leftInnerY),
+            strokeWidth = strokeW * 0.75f,
+            cap = StrokeCap.Round
+        )
+        val rightInnerY = rightEyeCenter.y + browYOffset + rightBrowTilt
+        val rightOuterY = rightEyeCenter.y + browYOffset - rightBrowTilt
+        drawLine(
+            color = glowColor.copy(alpha = 0.85f),
+            start = Offset(rightEyeCenter.x - browHalfW, rightInnerY),
+            end = Offset(rightEyeCenter.x + browHalfW, rightOuterY),
+            strokeWidth = strokeW * 0.75f,
+            cap = StrokeCap.Round
+        )
+    }
+
+    // 2. Expressive Eyes with natural blink
+    val eyeRadiusX = radius * when (emotion) {
+        AssistantEmotion.SURPRISED -> 0.115f
+        AssistantEmotion.EXCITED -> 0.105f
+        AssistantEmotion.SERIOUS -> 0.095f
+        else -> 0.095f
+    }
+    val baseEyeScaleY = when {
+        voiceState == VoiceState.LISTENING -> 1.25f
+        emotion == AssistantEmotion.SURPRISED -> 1.40f
+        emotion == AssistantEmotion.SERIOUS -> 0.76f
+        emotion == AssistantEmotion.SAD -> 0.85f
+        else -> 1.12f
+    }
+
+    if (emotion == AssistantEmotion.HAPPY || emotion == AssistantEmotion.EXCITED) {
+        // Warm cheerful upward crescent eyes ^ ^ (flashes open momentarily for excited)
+        for (eyeC in listOf(leftEyeCenter, rightEyeCenter)) {
+            if (emotion == AssistantEmotion.EXCITED && blinkOpenness > 0.4f) {
+                val eyeH = eyeRadiusX * 1.15f * blinkOpenness
+                drawOval(
+                    color = faceColor.copy(alpha = 0.95f),
+                    topLeft = Offset(eyeC.x - eyeRadiusX * 0.85f, eyeC.y - eyeH),
+                    size = Size(eyeRadiusX * 1.7f, eyeH * 2f)
+                )
+            } else {
+                val arcRectTopLeft = Offset(eyeC.x - eyeRadiusX, eyeC.y - eyeRadiusX * 0.55f)
+                drawArc(
+                    color = faceColor.copy(alpha = 0.95f),
+                    startAngle = 195f,
+                    sweepAngle = 150f,
+                    useCenter = false,
+                    topLeft = arcRectTopLeft,
+                    size = Size(eyeRadiusX * 2f, eyeRadiusX * 1.3f),
+                    style = Stroke(width = strokeW * 1.05f, cap = StrokeCap.Round)
+                )
+            }
+        }
+    } else {
+        listOf(leftEyeCenter to 1f, rightEyeCenter to if (emotion == AssistantEmotion.CURIOUS) 1.18f else 1f)
+            .forEach { (eyeC, curScale) ->
+                val eyeH = max(strokeW * 0.65f, eyeRadiusX * baseEyeScaleY * curScale * blinkOpenness)
+                // Outer luminous halo
+                drawOval(
+                    color = glowColor.copy(alpha = 0.35f),
+                    topLeft = Offset(eyeC.x - eyeRadiusX * 1.25f, eyeC.y - eyeH * 1.25f),
+                    size = Size(eyeRadiusX * 2.5f, eyeH * 2.5f)
+                )
+                drawOval(
+                    color = faceColor.copy(alpha = 0.95f),
+                    topLeft = Offset(eyeC.x - eyeRadiusX, eyeC.y - eyeH),
+                    size = Size(eyeRadiusX * 2f, eyeH * 2f)
+                )
+            }
+    }
+
+    // 3. Expressive Mouth (animated with speaking audio + emotion)
+    val mouthY = center.y + radius * 0.21f
+    val mouthHalfW = radius * when (emotion) {
+        AssistantEmotion.EXCITED -> 0.26f
+        AssistantEmotion.HAPPY -> 0.23f
+        AssistantEmotion.SURPRISED -> 0.11f
+        AssistantEmotion.SAD -> 0.18f
+        else -> 0.20f
+    }
+
+    val isActivelySpeaking = voiceState == VoiceState.SPEAKING
+    val speakOpen = if (isActivelySpeaking) {
+        (radius * (0.045f + 0.08f * kotlin.math.abs(sin(wavePhase * 1.5f)) + smoothAudio * 0.09f))
+    } else {
+        0f
+    }
+
+    when {
+        emotion == AssistantEmotion.SURPRISED -> {
+            val openR = max(radius * 0.09f, speakOpen * 1.1f)
+            drawOval(
+                color = glowColor.copy(alpha = 0.35f),
+                topLeft = Offset(center.x - mouthHalfW * 1.3f, mouthY - openR * 1.3f),
+                size = Size(mouthHalfW * 2.6f, openR * 2.6f)
+            )
+            drawOval(
+                color = faceColor.copy(alpha = 0.95f),
+                topLeft = Offset(center.x - mouthHalfW, mouthY - openR),
+                size = Size(mouthHalfW * 2f, openR * 2f),
+                style = Stroke(width = strokeW)
+            )
+        }
+        isActivelySpeaking -> {
+            // Dynamic talking mouth curved by underlying emotion
+            val curveFactor = when (emotion) {
+                AssistantEmotion.HAPPY, AssistantEmotion.EXCITED -> 0.14f * radius
+                AssistantEmotion.SAD -> -0.07f * radius
+                AssistantEmotion.SERIOUS -> 0.01f * radius
+                else -> 0.07f * radius
+            }
+            val topPath = Path().apply {
+                moveTo(center.x - mouthHalfW, mouthY)
+                quadraticTo(center.x, mouthY - speakOpen * 0.55f + curveFactor * 0.2f, center.x + mouthHalfW, mouthY)
+            }
+            val bottomPath = Path().apply {
+                moveTo(center.x - mouthHalfW, mouthY)
+                quadraticTo(center.x, mouthY + speakOpen + curveFactor, center.x + mouthHalfW, mouthY)
+            }
+            drawPath(topPath, color = faceColor.copy(alpha = 0.92f), style = Stroke(width = strokeW, cap = StrokeCap.Round))
+            drawPath(bottomPath, color = faceColor.copy(alpha = 0.95f), style = Stroke(width = strokeW, cap = StrokeCap.Round))
+        }
+        else -> {
+            val path = Path().apply {
+                moveTo(center.x - mouthHalfW, mouthY)
+                when (emotion) {
+                    AssistantEmotion.HAPPY, AssistantEmotion.EXCITED -> {
+                        val depth = if (emotion == AssistantEmotion.EXCITED) 0.19f else 0.14f
+                        quadraticTo(center.x, mouthY + radius * depth, center.x + mouthHalfW, mouthY)
+                    }
+                    AssistantEmotion.SAD -> {
+                        quadraticTo(center.x, mouthY - radius * 0.11f, center.x + mouthHalfW, mouthY + radius * 0.02f)
+                    }
+                    AssistantEmotion.CURIOUS -> {
+                        quadraticTo(center.x + radius * 0.06f, mouthY + radius * 0.06f, center.x + mouthHalfW, mouthY - radius * 0.04f)
+                    }
+                    AssistantEmotion.SERIOUS -> {
+                        lineTo(center.x + mouthHalfW, mouthY)
+                    }
+                    AssistantEmotion.NEUTRAL -> {
+                        quadraticTo(center.x, mouthY + radius * 0.06f, center.x + mouthHalfW, mouthY)
+                    }
+                }
+            }
+            drawPath(
+                path = path,
+                color = faceColor.copy(alpha = 0.92f),
+                style = Stroke(width = strokeW, cap = StrokeCap.Round)
             )
         }
     }

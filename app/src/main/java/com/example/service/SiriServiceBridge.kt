@@ -1,6 +1,7 @@
 package com.example.service
 
 import android.util.Log
+import com.example.model.AssistantEmotion
 import com.example.voice.WakeEngineStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +39,9 @@ object SiriServiceBridge {
     private val _isConversationActive = MutableStateFlow(false)
     val isConversationActive: StateFlow<Boolean> = _isConversationActive.asStateFlow()
 
+    private val _assistantEmotion = MutableStateFlow(AssistantEmotion.NEUTRAL)
+    val assistantEmotion: StateFlow<AssistantEmotion> = _assistantEmotion.asStateFlow()
+
     private val _lastDiagnosticMessage = MutableStateFlow<String?>(null)
     val lastDiagnosticMessage: StateFlow<String?> = _lastDiagnosticMessage.asStateFlow()
 
@@ -49,6 +53,16 @@ object SiriServiceBridge {
 
     @Volatile
     private var foregroundListenerRef: WeakReference<ForegroundAssistantListener>? = null
+
+    fun setAssistantEmotion(emotion: AssistantEmotion) {
+        _assistantEmotion.value = emotion
+    }
+
+    fun isWakeEngineActivelyListening(): Boolean {
+        return _isServiceRunning.value &&
+            (_wakeEngineStatus.value == WakeEngineStatus.LISTENING ||
+                _wakeEngineStatus.value == WakeEngineStatus.PAUSED)
+    }
 
     fun setServiceRunning(running: Boolean) {
         _isServiceRunning.value = running

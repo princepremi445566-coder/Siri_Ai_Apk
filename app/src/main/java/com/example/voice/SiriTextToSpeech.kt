@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import com.example.model.AssistantEmotion
 import com.example.model.LanguageOption
 import com.example.model.VoiceGender
 import com.example.model.VoicePersonality
@@ -23,7 +24,7 @@ class SiriTextToSpeech(
     private var tts: TextToSpeech? = TextToSpeech(context.applicationContext, this)
     private var isInitialized = false
     private var isShutdown = false
-    private var pendingUtterance: Pair<String, String>? = null
+    private var pendingUtterance: Triple<String, String, AssistantEmotion>? = null
 
     @Volatile
     var lastVoiceFallbackNote: String? = null
@@ -35,8 +36,17 @@ class SiriTextToSpeech(
     private var currentPersonality: VoicePersonality = VoicePersonality.FRIENDLY
     private var currentVoiceGender: VoiceGender = VoiceGender.FEMALE
     private var currentLanguage: LanguageOption = LanguageOption.AUTO
+    private var currentEmotion: AssistantEmotion = AssistantEmotion.NEUTRAL
     private var customSpeedMultiplier: Float = 1.0f
     private var customPitchMultiplier: Float = 1.0f
+
+    // Cached voice/locale resolution to eliminate redundant Binder IPC lookups per utterance
+    private var cachedVoices: List<android.speech.tts.Voice>? = null
+    private var lastAppliedLocaleKey: String? = null
+    private var lastAppliedGenderKey: VoiceGender? = null
+    private var lastAppliedVoice: android.speech.tts.Voice? = null
+    private var lastAppliedPitch: Float = -1f
+    private var lastAppliedRate: Float = -1f
 
     private var activeFinalUtteranceId: String? = null
     private var speechSafetyRunnable: Runnable? = null
@@ -83,6 +93,11 @@ class SiriTextToSpeech(
         if (isShutdown) return
         if (status == TextToSpeech.SUCCESS) {
             isInitialized = true
+            cachedVoices = try {
+                tts?.voices?.toList()
+            } catch (_: Exception) {
+                null
+            }
             applyVoiceSettings()
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
@@ -114,13 +129,13 @@ class SiriTextToSpeech(
                     notifyState(false)
                 }
             })
-            Log.d("SiriTTS", "TextToSpeech successfully initialized")
+            Log.d("SiriTTS", "TextToSpeech successfully initialized (cachedVoices=${cachedVoices?.size ?: 0})")
             val pending = pendingUtterance
             pendingUtterance = null
             if (pending != null) {
                 mainHandler.post {
                     if (!isShutdown) {
-                        speak(pending.first, pending.second)
+                        speak(pending.first, pending.third, pending.second)
                     }
                 }
             }
@@ -138,12 +153,19 @@ class SiriTextToSpeech(
 
     fun setVoiceGender(gender: VoiceGender) {
         currentVoiceGender = gender
+        lastAppliedGenderKey = null
         applyVoiceSettings()
     }
 
     fun setLanguage(language: LanguageOption) {
         currentLanguage = language
+        lastAppliedLocaleKey = null
         applyVoiceSettings()
+    }
+
+    fun setEmotion(emotion: AssistantEmotion) {
+        currentEmotion = emotion
+        applyVoiceSettings(emotionOverride = emotion)
     }
 
     fun setSpeedMultiplier(multiplier: Float) {
@@ -156,11 +178,21 @@ class SiriTextToSpeech(
         applyVoiceSettings()
     }
 
+    /**
+     * Computes effective (pitch, speechRate) combining Personality, Gender, Custom Multipliers, and Active Emotion.
+     */
+    fun computeEffectiveVoiceParams(emotion: AssistantEmotion = currentEmotion): Pair<Float, Float> {
+        val effectivePitch = (currentPersonality.pitch * customPitchMultiplier * currentVoiceGender.pitchFactor * emotion.pitchMultiplier)
+            .coerceIn(0.55f, 1.85f)
+        val effectiveRate = (currentPersonality.speechRate * customSpeedMultiplier * emotion.rateMultiplier)
+            .coerceIn(0.55f, 1.85f)
+        return effectivePitch to effectiveRate
+    }
+
     private fun getTargetLocale(text: String? = null): Locale {
         return when (currentLanguage) {
             LanguageOption.HINDI -> Locale.forLanguageTag("hi-IN")
             LanguageOption.HINGLISH -> {
-                // If text is provided and contains Devanagari script, use Hindi locale; otherwise use Indian English for natural Hinglish
                 if (text != null && text.any { it in '\u0900'..'\u097F' }) {
                     Locale.forLanguageTag("hi-IN")
                 } else {
@@ -174,43 +206,55 @@ class SiriTextToSpeech(
         }
     }
 
-    fun applyVoiceSettings(forText: String? = null) {
+    fun applyVoiceSettings(forText: String? = null, emotionOverride: AssistantEmotion = currentEmotion) {
         val engine = tts ?: return
         if (!isInitialized) return
 
         val locale = getTargetLocale(forText)
-        val langResult = engine.setLanguage(locale)
-        if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-            // Fallback to English (India or US) if target locale not supported on device
-            if (locale.language == "hi") {
-                val fallbackResult = engine.setLanguage(Locale.forLanguageTag("en-IN"))
-                if (fallbackResult == TextToSpeech.LANG_MISSING_DATA || fallbackResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+        val localeTag = locale.toLanguageTag()
+
+        if (lastAppliedLocaleKey != localeTag || lastAppliedGenderKey != currentVoiceGender) {
+            val langResult = engine.setLanguage(locale)
+            if (langResult == TextToSpeech.LANG_MISSING_DATA || langResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                if (locale.language == "hi") {
+                    val fallbackResult = engine.setLanguage(Locale.forLanguageTag("en-IN"))
+                    if (fallbackResult == TextToSpeech.LANG_MISSING_DATA || fallbackResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        engine.setLanguage(Locale.US)
+                    }
+                } else {
                     engine.setLanguage(Locale.US)
                 }
-            } else {
-                engine.setLanguage(Locale.US)
             }
+            applyGenderVoice(locale)
+            lastAppliedLocaleKey = localeTag
+            lastAppliedGenderKey = currentVoiceGender
         }
 
-        applyGenderVoice(locale)
-
-        val effectivePitch = (currentPersonality.pitch * customPitchMultiplier * currentVoiceGender.pitchFactor).coerceIn(0.5f, 2.0f)
-        val effectiveRate = (currentPersonality.speechRate * customSpeedMultiplier).coerceIn(0.5f, 2.0f)
-
-        engine.setPitch(effectivePitch)
-        engine.setSpeechRate(effectiveRate)
+        val (effectivePitch, effectiveRate) = computeEffectiveVoiceParams(emotionOverride)
+        if (kotlin.math.abs(lastAppliedPitch - effectivePitch) > 0.005f) {
+            engine.setPitch(effectivePitch)
+            lastAppliedPitch = effectivePitch
+        }
+        if (kotlin.math.abs(lastAppliedRate - effectiveRate) > 0.005f) {
+            engine.setSpeechRate(effectiveRate)
+            lastAppliedRate = effectiveRate
+        }
     }
 
     private fun applyGenderVoice(targetLocale: Locale) {
         val engine = tts ?: return
         lastVoiceFallbackNote = null
         try {
-            val availableVoices = engine.voices
+            val availableVoices = cachedVoices ?: try {
+                engine.voices?.toList()?.also { cachedVoices = it }
+            } catch (_: Exception) {
+                null
+            }
             if (!availableVoices.isNullOrEmpty()) {
                 val matchingLocaleVoices = availableVoices.filter { voice ->
                     voice.locale.language.equals(targetLocale.language, ignoreCase = true)
                 }
-                val pool = if (matchingLocaleVoices.isNotEmpty()) matchingLocaleVoices else availableVoices.toList()
+                val pool = if (matchingLocaleVoices.isNotEmpty()) matchingLocaleVoices else availableVoices
 
                 fun isFemaleVoice(voice: android.speech.tts.Voice): Boolean {
                     val n = voice.name.lowercase(Locale.ROOT)
@@ -250,8 +294,9 @@ class SiriTextToSpeech(
                     }
                     VoiceGender.SYSTEM_DEFAULT -> null
                 }
-                if (selectedVoice != null) {
+                if (selectedVoice != null && selectedVoice.name != lastAppliedVoice?.name) {
                     engine.voice = selectedVoice
+                    lastAppliedVoice = selectedVoice
                     Log.d("SiriTTS", "Applied engine voice: ${selectedVoice.name} for $currentVoiceGender")
                 }
             }
@@ -262,6 +307,7 @@ class SiriTextToSpeech(
 
     fun sanitizeForSpeech(text: String): String {
         val stripped = text
+            .replace(Regex("""\[\s*EMOTION\s*:\s*[A-Za-z_]+\s*\]\s*""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\*\*([^*]+)\*\*"""), "$1")
             .replace(Regex("""\*([^*]+)\*"""), "$1")
             .replace(Regex("""__([^_]+)__"""), "$1")
@@ -362,11 +408,16 @@ class SiriTextToSpeech(
         }
     }
 
-    fun speak(text: String, utteranceId: String = "siri_speech_${System.currentTimeMillis()}") {
+    fun speak(
+        text: String,
+        emotion: AssistantEmotion = currentEmotion,
+        utteranceId: String = "siri_speech_${System.currentTimeMillis()}"
+    ) {
         if (isShutdown) {
             notifyState(false)
             return
         }
+        currentEmotion = emotion
         val clean = sanitizeForSpeech(text)
         if (clean.isBlank()) {
             notifyState(false)
@@ -375,16 +426,14 @@ class SiriTextToSpeech(
 
         if (!isInitialized || tts == null) {
             Log.w("SiriTTS", "TTS initializing; queuing utterance")
-            pendingUtterance = text to utteranceId
+            pendingUtterance = Triple(text, utteranceId, emotion)
             return
         }
         stopInternal(notifyIdle = false)
 
-        // Always apply target locale, pitch, speed, and gender voice for this utterance
-        applyVoiceSettings(clean)
+        applyVoiceSettings(clean, emotion)
 
-        // Split into natural spoken chunks with sentence (~180ms) and clause (~65ms) pauses
-        val speechChunks = buildSpokenChunksWithPauses(clean)
+        val speechChunks = buildSpokenChunksWithPauses(clean, emotion)
         if (speechChunks.isEmpty()) {
             notifyState(false)
             return
@@ -424,14 +473,93 @@ class SiriTextToSpeech(
     }
 
     /**
+     * Queues an incremental sentence immediately during streaming AI generation so audio
+     * starts playing as soon as the first clause arrives.
+     */
+    fun speakStreamSentence(
+        sentence: String,
+        emotion: AssistantEmotion = currentEmotion,
+        isFirst: Boolean,
+        isFinal: Boolean,
+        streamId: String
+    ) {
+        if (isShutdown) return
+        currentEmotion = emotion
+        val clean = sanitizeForSpeech(sentence)
+        if (clean.isBlank()) {
+            if (isFinal && activeFinalUtteranceId == null) {
+                notifyState(false)
+            }
+            return
+        }
+
+        if (!isInitialized || tts == null) {
+            if (isFirst) {
+                pendingUtterance = Triple(clean, streamId, emotion)
+            }
+            return
+        }
+
+        if (isFirst) {
+            stopInternal(notifyIdle = false)
+            applyVoiceSettings(clean, emotion)
+        }
+
+        val uttId = if (isFinal) "${streamId}_final" else "${streamId}_chunk_${System.nanoTime()}"
+        if (isFinal) {
+            activeFinalUtteranceId = uttId
+        } else if (activeFinalUtteranceId == null) {
+            activeFinalUtteranceId = "${streamId}_pending_final"
+        }
+
+        val params = Bundle().apply {
+            putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, uttId)
+        }
+        val queueMode = if (isFirst) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+        val result = tts?.speak(clean, queueMode, params, uttId) ?: TextToSpeech.ERROR
+        if (result == TextToSpeech.SUCCESS) {
+            if (!isFinal) {
+                tts?.playSilentUtterance(95L, TextToSpeech.QUEUE_ADD, null)
+            }
+            scheduleSpeechSafetyWatchdog(clean.length + 120)
+        }
+    }
+
+    fun markStreamCompleted(streamId: String) {
+        if (isShutdown) return
+        val finalId = "${streamId}_done_sentinel"
+        activeFinalUtteranceId = finalId
+        val res = tts?.playSilentUtterance(10L, TextToSpeech.QUEUE_ADD, finalId)
+        if (res != TextToSpeech.SUCCESS && tts?.isSpeaking != true) {
+            cancelSpeechSafetyWatchdog()
+            activeFinalUtteranceId = null
+            abandonAudioFocus()
+            notifyState(false)
+        }
+    }
+
+    /**
      * Breaks sanitized text into sentences and long clauses with natural human breath pauses.
      */
-    fun buildSpokenChunksWithPauses(cleanText: String): List<Pair<String, Long>> {
+    fun buildSpokenChunksWithPauses(
+        cleanText: String,
+        emotion: AssistantEmotion = currentEmotion
+    ): List<Pair<String, Long>> {
+        val sentencePause = when (emotion) {
+            AssistantEmotion.EXCITED -> 120L
+            AssistantEmotion.SAD, AssistantEmotion.SERIOUS -> 210L
+            else -> 180L
+        }
+        val clausePause = when (emotion) {
+            AssistantEmotion.EXCITED -> 45L
+            AssistantEmotion.SAD, AssistantEmotion.SERIOUS -> 80L
+            else -> 65L
+        }
+
         val sentences = cleanText.split(Regex("""(?<=[.!?।])\s+""")).filter { it.isNotBlank() }
         val result = mutableListOf<Pair<String, Long>>()
         for ((sIdx, sentence) in sentences.withIndex()) {
             val isLastSentence = (sIdx == sentences.lastIndex)
-            // Split longer sentences along major clause boundaries for natural human pacing
             val clauses = if (sentence.length > 55) {
                 sentence.split(Regex("""(?<=[,;:])\s+""")).filter { it.isNotBlank() }
             } else {
@@ -441,8 +569,8 @@ class SiriTextToSpeech(
                 val isLastClauseInSentence = (cIdx == clauses.lastIndex)
                 val pauseMs = when {
                     isLastSentence && isLastClauseInSentence -> 0L
-                    isLastClauseInSentence -> 180L // natural breath pause between sentences
-                    else -> 65L // light phrasing pause on commas/semicolons
+                    isLastClauseInSentence -> sentencePause
+                    else -> clausePause
                 }
                 result.add(clause to pauseMs)
             }

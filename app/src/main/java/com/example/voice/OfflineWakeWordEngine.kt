@@ -141,42 +141,71 @@ object HeySiriAcousticAnalyzer {
         return clean.any { it in setOf('s', 'z', 'c', 'x', 'स', 'श', 'ष', 'ज') }
     }
 
+    data class WakeWordMatchResult(
+        val matched: Boolean,
+        val confidence: Float,
+        val peakSnr: Double,
+        val durationFrames: Int
+    )
+
     /**
-     * Evaluates a captured speech burst (sequence of 20ms FrameFeatures) to decide whether it matches
-     * the acoustic signature of "Hey <AssistantName>" / "Suno <AssistantName>" / "<AssistantName>":
-     * - Duration: 340ms - 2200ms (17 to 110 frames)
-     * - Multi-syllable structure (at least 2 distinct voiced/syllable energy peaks or strong 2-part contour)
-     * - Rejects saturated continuous media / flat hum bursts that hit the max window without ending naturally
-     * - Sibilant fricative check when the configured assistant name contains sibilants (e.g. "Siri", "Jarvis"),
-     *   or voiced-cadence contour when the custom name is non-sibilant (e.g. "Aria", "Nova", "Buddy").
+     * Evaluates a captured speech burst (sequence of 20ms FrameFeatures) with multi-factor
+     * acoustic confidence scoring to prevent false activations on TV, background dialogue,
+     * and ambient noise:
+     * - Compact wake-phrase duration (17..85 frames for "Hey Siri" / "Suno Siri")
+     * - Peak SNR >= 3.0x noise floor and healthy dynamic crest factor
+     * - Temporal phonetic ordering for sibilant names ("Siri"): voiced onset -> /s/ fricative -> tail vowel
+     * - Bounded syllable count (rejects long multi-word conversation sentences)
      */
-    fun matchesWakeWordContour(
+    fun evaluateWakeWordContour(
         frames: List<FrameFeatures>,
         noiseFloorRms: Double,
         wakeWordOption: WakeWordOption = WakeWordOption.HEY_SIRI,
         assistantName: String = "Siri"
-    ): Boolean {
-        if (frames.size < 17 || frames.size > 110) return false
+    ): WakeWordMatchResult {
+        val maxFramesForOption = when (wakeWordOption) {
+            WakeWordOption.SIRI -> 68
+            WakeWordOption.HEY_SIRI, WakeWordOption.SUNO_SIRI -> 85
+        }
+        if (frames.size < 17 || frames.size > maxFramesForOption) {
+            return WakeWordMatchResult(false, 0f, 0.0, frames.size)
+        }
 
-        val speechThreshold = (noiseFloorRms * 2.35).coerceAtLeast(340.0)
+        val safeFloor = noiseFloorRms.coerceAtLeast(90.0)
+        val speechThreshold = (safeFloor * 2.45).coerceAtLeast(350.0)
         var activeSpeechFrames = 0
         var voicedFrames = 0
         var sibilantFrames = 0
         var syllablePeaks = 0
         var inSyllable = false
         val peakThreshold = speechThreshold * 1.15
-        val dipThreshold = speechThreshold * 0.75
+        val dipThreshold = speechThreshold * 0.72
 
-        for (frame in frames) {
+        var maxRms = 0.0
+        var activeRmsSum = 0.0
+        var firstVoicedIdx = -1
+        var firstSibilantIdx = -1
+        var lastSibilantIdx = -1
+        var voicedAfterSibilantFrames = 0
+
+        for ((idx, frame) in frames.withIndex()) {
+            if (frame.rms > maxRms) maxRms = frame.rms
             if (frame.rms >= speechThreshold) {
                 activeSpeechFrames++
+                activeRmsSum += frame.rms
             }
-            if (frame.voicedEnergy > frame.sibilantEnergy * 0.8 && frame.rms >= speechThreshold * 0.85) {
+            val isVoicedFrame = frame.voicedEnergy > frame.sibilantEnergy * 0.85 && frame.rms >= speechThreshold * 0.85
+            if (isVoicedFrame) {
                 voicedFrames++
+                if (firstVoicedIdx == -1) firstVoicedIdx = idx
+                if (firstSibilantIdx != -1) voicedAfterSibilantFrames++
             }
             // Sibilant /s/ in "Siri" exhibits high zero-crossing rate and high-band energy
-            if (frame.zcr >= 0.16 && frame.sibilantEnergy > frame.voicedEnergy * 0.12 && frame.rms >= noiseFloorRms * 1.5) {
+            val isSibilantFrame = frame.zcr >= 0.16 && frame.sibilantEnergy > frame.voicedEnergy * 0.12 && frame.rms >= safeFloor * 1.5
+            if (isSibilantFrame) {
                 sibilantFrames++
+                if (firstSibilantIdx == -1) firstSibilantIdx = idx
+                lastSibilantIdx = idx
             }
 
             if (!inSyllable && frame.rms >= peakThreshold) {
@@ -187,8 +216,14 @@ object HeySiriAcousticAnalyzer {
             }
         }
 
-        // Continuous speaker music / video dialogue hits the 110-frame cutoff without quiet pauses
-        if (frames.size >= 105 && activeSpeechFrames > 92) return false
+        // Reject continuous speaker music / TV dialogue that runs near capture ceiling without pause
+        if (frames.size >= 82 && activeSpeechFrames > (frames.size * 0.85)) {
+            return WakeWordMatchResult(false, 0.10f, maxRms / safeFloor, frames.size)
+        }
+
+        val peakSnr = maxRms / safeFloor
+        val meanActiveRms = if (activeSpeechFrames > 0) activeRmsSum / activeSpeechFrames else 0.0
+        val meanSnr = meanActiveRms / safeFloor
 
         val minActiveFrames = when (wakeWordOption) {
             WakeWordOption.SIRI -> 10
@@ -198,12 +233,63 @@ object HeySiriAcousticAnalyzer {
             WakeWordOption.SIRI -> 1
             WakeWordOption.HEY_SIRI, WakeWordOption.SUNO_SIRI -> 2
         }
+        val maxPeaks = when (wakeWordOption) {
+            WakeWordOption.SIRI -> 3
+            WakeWordOption.HEY_SIRI, WakeWordOption.SUNO_SIRI -> 4
+        }
         val requiresSibilant = hasSibilantPhoneme(assistantName)
 
-        return activeSpeechFrames >= minActiveFrames &&
+        // Temporal phonetic sequence check:
+        // "Hey Siri" / "Suno Siri" must have voiced onset ("Hey"/"Suno") before /s/, AND voiced tail ("iri") after /s/
+        val validPhoneticOrder = if (!requiresSibilant) {
+            true
+        } else if (wakeWordOption == WakeWordOption.SIRI) {
+            sibilantFrames >= 2 && voicedAfterSibilantFrames >= 4
+        } else {
+            val sibilantSpan = if (firstSibilantIdx >= 0 && lastSibilantIdx >= firstSibilantIdx) {
+                lastSibilantIdx - firstSibilantIdx + 1
+            } else 0
+            // One compact sibilant island (not scattered /s/ across an unrelated multi-word sentence)
+            sibilantFrames >= 2 &&
+                firstVoicedIdx in 0 until firstSibilantIdx &&
+                voicedAfterSibilantFrames >= 4 &&
+                sibilantSpan <= 18
+        }
+
+        val hardPass = activeSpeechFrames >= minActiveFrames &&
             voicedFrames >= 6 &&
-            (!requiresSibilant || sibilantFrames >= 2) &&
-            syllablePeaks >= minPeaks
+            peakSnr >= 3.0 &&
+            meanSnr >= 2.25 &&
+            syllablePeaks in minPeaks..maxPeaks &&
+            (!requiresSibilant || (sibilantFrames >= 2 && validPhoneticOrder))
+
+        if (!hardPass) {
+            return WakeWordMatchResult(false, 0.2f, peakSnr, frames.size)
+        }
+
+        // Weighted confidence score (0f..1f)
+        val snrScore = ((peakSnr - 2.5) / 6.0).coerceIn(0.0, 1.0).toFloat()
+        val durationScore = if (frames.size in 20..62) 1.0f else 0.72f
+        val peakScore = if (syllablePeaks in minPeaks..3) 1.0f else 0.78f
+        val sequenceScore = if (validPhoneticOrder) 1.0f else 0.0f
+        val confidence = (snrScore * 0.35f) + (durationScore * 0.25f) + (peakScore * 0.15f) + (sequenceScore * 0.25f)
+
+        val requiredConfidence = if (safeFloor > 420.0) 0.72f else 0.66f
+        return WakeWordMatchResult(
+            matched = confidence >= requiredConfidence,
+            confidence = confidence,
+            peakSnr = peakSnr,
+            durationFrames = frames.size
+        )
+    }
+
+    fun matchesWakeWordContour(
+        frames: List<FrameFeatures>,
+        noiseFloorRms: Double,
+        wakeWordOption: WakeWordOption = WakeWordOption.HEY_SIRI,
+        assistantName: String = "Siri"
+    ): Boolean {
+        return evaluateWakeWordContour(frames, noiseFloorRms, wakeWordOption, assistantName).matched
     }
 }
 
@@ -253,6 +339,8 @@ class OfflineWakeWordEngine(
     private var recordingCallback: AudioManager.AudioRecordingCallback? = null
 
     fun getStatus(): WakeEngineStatus = currentStatus
+
+    fun isActivelyCapturing(): Boolean = isEnabled.get() && !isPaused.get() && captureJob?.isActive == true
 
     fun isOnDeviceRecognizerSupported(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -532,9 +620,11 @@ class OfflineWakeWordEngine(
                 var noiseFloor = 240.0
                 var speechActive = false
                 var silenceFrames = 0
+                var onsetConfirmCount = 0
+                var prevOnsetFrame: HeySiriAcousticAnalyzer.FrameFeatures? = null
                 var consecutiveZeroReads = 0
                 var consecutiveSilencedFrames = 0
-                val candidateFrames = ArrayList<HeySiriAcousticAnalyzer.FrameFeatures>(115)
+                val candidateFrames = ArrayList<HeySiriAcousticAnalyzer.FrameFeatures>(90)
 
                 while (scope.isActive && isEnabled.get() && !isPaused.get()) {
                     if (hasActiveCall()) {
@@ -582,17 +672,26 @@ class OfflineWakeWordEngine(
                     }
                     consecutiveSilencedFrames = 0
 
-                    val onsetThreshold = (noiseFloor * 2.85).coerceAtLeast(400.0)
+                    val onsetThreshold = (noiseFloor * 3.1).coerceAtLeast(450.0)
 
                     if (!speechActive) {
-                        // Track ambient noise floor without letting loud background media starve real commands
-                        if (features.rms < onsetThreshold * 0.9) {
-                            noiseFloor = (noiseFloor * 0.985 + features.rms * 0.015).coerceIn(110.0, 700.0)
+                        if (features.rms < onsetThreshold * 0.85) {
+                            onsetConfirmCount = 0
+                            prevOnsetFrame = null
+                            noiseFloor = (noiseFloor * 0.985 + features.rms * 0.015).coerceIn(110.0, 750.0)
                         } else if (features.rms >= onsetThreshold && features.voicedEnergy > 0.0) {
-                            speechActive = true
-                            silenceFrames = 0
-                            candidateFrames.clear()
-                            candidateFrames.add(features)
+                            onsetConfirmCount++
+                            if (onsetConfirmCount >= 2) {
+                                speechActive = true
+                                silenceFrames = 0
+                                candidateFrames.clear()
+                                prevOnsetFrame?.let { candidateFrames.add(it) }
+                                candidateFrames.add(features)
+                                onsetConfirmCount = 0
+                                prevOnsetFrame = null
+                            } else {
+                                prevOnsetFrame = features
+                            }
                         }
 
                         if (!speechActive && powerManager?.isPowerSaveMode == true) {
@@ -600,15 +699,15 @@ class OfflineWakeWordEngine(
                         }
                     } else {
                         candidateFrames.add(features)
-                        if (features.rms < noiseFloor * 1.85) {
+                        if (features.rms < noiseFloor * 1.9) {
                             silenceFrames++
                         } else {
                             silenceFrames = 0
                         }
 
-                        // End of speech burst (~260ms silence hangover) or max wake-word window (~2.2s)
-                        if (silenceFrames >= 13 || candidateFrames.size >= 110) {
-                            val matched = HeySiriAcousticAnalyzer.matchesWakeWordContour(
+                        // End of speech burst (~240ms silence hangover) or max wake-word window (~1.8s)
+                        if (silenceFrames >= 12 || candidateFrames.size >= 90) {
+                            val eval = HeySiriAcousticAnalyzer.evaluateWakeWordContour(
                                 frames = candidateFrames,
                                 noiseFloorRms = noiseFloor,
                                 wakeWordOption = currentWakeOption,
@@ -620,9 +719,12 @@ class OfflineWakeWordEngine(
 
                             val now = System.currentTimeMillis()
                             val cooldownMs = effectiveCooldownMs()
-                            if (matched && (now - lastTriggerTimestamp.get()) > cooldownMs) {
+                            if (eval.matched && (now - lastTriggerTimestamp.get()) > cooldownMs) {
                                 lastTriggerTimestamp.set(now)
-                                Log.d(TAG, "Offline wake-word candidate detected (${currentWakeOption.label} / $customAssistantName)")
+                                Log.d(
+                                    TAG,
+                                    "Offline wake-word detected (${currentWakeOption.label}/$customAssistantName, conf=${"%.2f".format(eval.confidence)}, snr=${"%.1f".format(eval.peakSnr)})"
+                                )
                                 isPaused.set(true)
                                 updateStatus(WakeEngineStatus.PAUSED_COMMAND)
                                 try {

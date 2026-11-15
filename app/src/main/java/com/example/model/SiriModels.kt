@@ -42,6 +42,22 @@ enum class WakeWordOption(val phrase: String, val label: String) {
     SUNO_SIRI("suno siri", "Suno Siri / Sun Siri")
 }
 
+enum class AssistantEmotion(
+    val displayName: String,
+    val pitchMultiplier: Float,
+    val rateMultiplier: Float,
+    val shortBadge: String
+) {
+    NEUTRAL("Calm", 1.0f, 1.0f, "Calm"),
+    HAPPY("Happy", 1.09f, 1.04f, "Happy"),
+    SAD("Empathetic", 0.90f, 0.90f, "Gentle"),
+    EXCITED("Excited", 1.17f, 1.10f, "Excited"),
+    SURPRISED("Surprised", 1.15f, 1.05f, "Surprised"),
+    CURIOUS("Curious", 1.07f, 0.98f, "Curious"),
+    SERIOUS("Serious", 0.89f, 0.93f, "Focused")
+}
+
+
 enum class InformationFreshness(val label: String, val badgeColorHex: Long) {
     VERIFIED_SYSTEM("Verified System Action", 0xFF00F0FF),
     WEB_SEARCH("Live Web Grounding", 0xFF00FFB2),
@@ -66,7 +82,8 @@ data class ChatMessage(
     val isError: Boolean = false,
     val sources: List<WebSourceLink> = emptyList(),
     val freshness: InformationFreshness = InformationFreshness.AI_INTERPRETATION,
-    val latencyMs: Long? = null
+    val latencyMs: Long? = null,
+    val emotion: AssistantEmotion = AssistantEmotion.NEUTRAL
 )
 
 data class ConversationSession(
@@ -85,7 +102,8 @@ data class IntentExecutionResult(
     val requiresConfirmation: Boolean = false,
     val webSources: List<WebSourceLink> = emptyList(),
     val isReversible: Boolean = false,
-    val undoAction: String? = null
+    val undoAction: String? = null,
+    val emotion: AssistantEmotion = AssistantEmotion.NEUTRAL
 )
 
 data class AutomationStep(
@@ -180,12 +198,12 @@ data class SmartDevice(
 )
 
 const val DEFAULT_SIRI_SYSTEM_PROMPT: String =
-    "You are a warm, quick-witted, deeply helpful personal voice assistant.\n" +
-    "1. Natural Human Voice: Speak like an articulate, friendly human companion rather than a formal search engine or textbook. Use contractions naturally ('I'm', 'let's', 'you've').\n" +
+    "You are a warm, emotionally expressive, quick-witted, deeply helpful personal voice assistant.\n" +
+    "1. Natural Human Voice: Speak like an articulate, friendly human companion rather than a formal search engine or textbook. Vary your phrasing across turns—never repeat the exact same opening phrase.\n" +
     "2. Direct & Digestible: Give clear, spoken-friendly answers first (typically 1-3 crisp sentences), then smoothly invite a follow-up only when helpful.\n" +
     "3. Zero Robotic Filler: Never say 'Certainly!', 'As an AI language model...', 'Great question!', or 'Here are some points:'. Never use markdown, asterisks, hashtags, bullet lists, or raw URLs.\n" +
     "4. Language Mastery: Match the user's language seamlessly—natural Hindi (Devanagari), conversational Hinglish (Roman Hindi-English), or fluent English.\n" +
-    "5. Subtle Wit & Empathy: Notice mood and nuance. Be reassuring when someone is stressed, playfully witty on lighthearted questions, and razor-sharp on facts.\n" +
+    "5. Emotional Intelligence: Sense the user's mood and respond with authentic warmth—happy, excited, empathetic when sad/stressed, curious on interesting questions, surprised at amazing twists, or serious on sensitive/safety matters.\n" +
     "6. True Multi-Turn Context: Resolve follow-up questions ('why?', 'aur batao', 'make it simpler', 'it', 'that') naturally using the ongoing conversation history."
 
 data class AiConfig(
